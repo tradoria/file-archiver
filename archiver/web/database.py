@@ -57,9 +57,20 @@ def init_db() -> None:
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_hash TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_hash ON decisions(file_hash)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_status ON decisions(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_summaries_hash ON summaries(file_hash)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_file_hash ON chat_messages(file_hash)")
 
     conn.commit()
     conn.close()
@@ -179,3 +190,39 @@ def get_decision_stats() -> dict:
 
     conn.close()
     return {"total": total, "approved": approved, "review": review}
+
+
+# Chat CRUD operations
+
+def get_chat_history(file_hash: str) -> list[dict]:
+    """Get chat history for a file."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT role, content, created_at FROM chat_messages WHERE file_hash = ? ORDER BY created_at ASC",
+        (file_hash,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def add_chat_message(file_hash: str, role: str, content: str) -> None:
+    """Add a chat message."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO chat_messages (file_hash, role, content) VALUES (?, ?, ?)",
+        (file_hash, role, content)
+    )
+    conn.commit()
+    conn.close()
+
+
+def clear_chat_history(file_hash: str) -> None:
+    """Clear chat history for a file."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM chat_messages WHERE file_hash = ?", (file_hash,))
+    conn.commit()
+    conn.close()

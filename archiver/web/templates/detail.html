@@ -149,6 +149,48 @@
             </button>
         </div>
         {% endif %}
+
+        <!-- Chat -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-semibold text-gray-800">Chat</h2>
+                <button onclick="clearChat()" class="text-red-600 hover:underline text-sm">
+                    Loschen
+                </button>
+            </div>
+
+            <!-- Chat History -->
+            <div id="chat-history" class="space-y-3 max-h-64 overflow-y-auto mb-4">
+                <div class="text-gray-500 text-sm">Stellen Sie Fragen zur Datei...</div>
+            </div>
+
+            <!-- Chat Input -->
+            <div class="border-t pt-3">
+                <textarea
+                    id="chat-input"
+                    rows="2"
+                    class="w-full border rounded px-3 py-2 text-sm resize-none"
+                    placeholder="z.B. Warum nicht Modul 03?"
+                    onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); }"
+                ></textarea>
+                <button onclick="sendMessage()" id="send-btn" class="w-full mt-2 btn btn-primary">
+                    Senden
+                </button>
+            </div>
+
+            <!-- Quick Questions -->
+            <div class="mt-3 space-y-1">
+                <button onclick="askQuick('Erklare warum diese Datei hier einsortiert wurde')" class="text-xs text-blue-600 hover:underline block">
+                    Warum diese Sortierung?
+                </button>
+                <button onclick="askQuick('Was ist der Hauptinhalt dieser Datei?')" class="text-xs text-blue-600 hover:underline block">
+                    Was ist der Inhalt?
+                </button>
+                <button onclick="askQuick('Ware ein anderer Ordner besser geeignet?')" class="text-xs text-blue-600 hover:underline block">
+                    Alternativen?
+                </button>
+            </div>
+        </div>
     </div>
 </div>
 {% endblock %}
@@ -169,5 +211,119 @@ async function handleAction(action) {
         alert('Fehler: ' + (result.error || 'Unbekannt'));
     }
 }
+
+// Chat functions
+const fileHash = '{{ file.hash }}';
+
+async function loadChatHistory() {
+    try {
+        const response = await fetch(`/api/chat/${fileHash}/history`);
+        const data = await response.json();
+        renderChatHistory(data.history || []);
+    } catch (e) {
+        console.error('Error loading chat history:', e);
+    }
+}
+
+function renderChatHistory(history) {
+    const container = document.getElementById('chat-history');
+    if (!history || history.length === 0) {
+        container.innerHTML = '<div class="text-gray-500 text-sm">Stellen Sie Fragen zur Datei...</div>';
+        return;
+    }
+
+    container.innerHTML = history.map(msg => {
+        const isUser = msg.role === 'user';
+        const bgClass = isUser ? 'bg-blue-50' : 'bg-gray-50';
+        const label = isUser ? 'Sie' : 'KI';
+        return `
+            <div class="${bgClass} rounded p-2 text-sm">
+                <div class="font-medium text-xs text-gray-500 mb-1">${label}</div>
+                <div class="text-gray-800">${escapeHtml(msg.content)}</div>
+            </div>
+        `;
+    }).join('');
+
+    container.scrollTop = container.scrollHeight;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+async function sendMessage() {
+    const input = document.getElementById('chat-input');
+    const message = input.value.trim();
+    if (!message) return;
+
+    const sendBtn = document.getElementById('send-btn');
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Sende...';
+
+    // Add user message immediately
+    const container = document.getElementById('chat-history');
+    if (container.querySelector('.text-gray-500')) {
+        container.innerHTML = '';
+    }
+    container.innerHTML += `
+        <div class="bg-blue-50 rounded p-2 text-sm">
+            <div class="font-medium text-xs text-gray-500 mb-1">Sie</div>
+            <div class="text-gray-800">${escapeHtml(message)}</div>
+        </div>
+    `;
+    container.innerHTML += `
+        <div class="bg-gray-50 rounded p-2 text-sm" id="typing-indicator">
+            <div class="font-medium text-xs text-gray-500 mb-1">KI</div>
+            <div class="text-gray-500">Denkt nach...</div>
+        </div>
+    `;
+    container.scrollTop = container.scrollHeight;
+
+    input.value = '';
+
+    try {
+        const response = await fetch(`/api/chat/${fileHash}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message })
+        });
+        const data = await response.json();
+
+        // Remove typing indicator and render full history
+        renderChatHistory(data.history || []);
+    } catch (e) {
+        document.getElementById('typing-indicator')?.remove();
+        container.innerHTML += `
+            <div class="bg-red-50 rounded p-2 text-sm">
+                <div class="text-red-600">Fehler: ${e.message}</div>
+            </div>
+        `;
+    }
+
+    sendBtn.disabled = false;
+    sendBtn.textContent = 'Senden';
+}
+
+async function askQuick(question) {
+    document.getElementById('chat-input').value = question;
+    await sendMessage();
+}
+
+async function clearChat() {
+    if (!confirm('Chat-Verlauf loschen?')) return;
+
+    try {
+        await fetch(`/api/chat/${fileHash}/clear`, { method: 'POST' });
+        document.getElementById('chat-history').innerHTML =
+            '<div class="text-gray-500 text-sm">Stellen Sie Fragen zur Datei...</div>';
+    } catch (e) {
+        alert('Fehler: ' + e.message);
+    }
+}
+
+// Load chat history on page load
+document.addEventListener('DOMContentLoaded', loadChatHistory);
 </script>
 {% endblock %}

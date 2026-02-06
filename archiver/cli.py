@@ -281,6 +281,153 @@ def serve_cmd(
     flask_app.run(host="0.0.0.0", port=port, debug=True)
 
 
+@app.command("copy")
+def copy_cmd(
+    target: Path = typer.Option(..., "--target", "-t", help="Target directory for sorted files."),
+    mode: str = typer.Option("copy", "--mode", "-m", help="'copy' or 'move' files."),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show what would happen without copying."),
+    include_transcripts: bool = typer.Option(False, "--include-transcripts", "-T", help="Place transcripts next to originals."),
+    source_csv: Path = typer.Option(None, "--source-csv", "-s", help="Source CSV (default: artifacts/report_final.csv)."),
+    config: Path = typer.Option(Path("config.yaml"), "--config", "-c", help="Path to config.yaml."),
+) -> None:
+    """Copy or move files to target directory based on sorting decisions."""
+    import shutil
+    from datetime import datetime
+
+    cfg = _load_config(config)
+    artifacts = Path(cfg.get("artifacts_dir", "./artifacts")).resolve()
+
+    # Determine source CSV
+    if source_csv is None:
+        source_csv = artifacts / "report_final.csv"
+        if not source_csv.exists():
+            source_csv = artifacts / "report_analyzed.csv"
+
+    if not source_csv.exists():
+        typer.echo(f"ERROR: CSV not found: {source_csv}", err=True)
+        typer.echo("Run 'analyze' first, or use Web-UI to export report_final.csv.", err=True)
+        raise typer.Exit(1)
+
+    # Validate mode
+    if mode not in ("copy", "move"):
+        typer.echo(f"ERROR: Mode must be 'copy' or 'move', got '{mode}'", err=True)
+        raise typer.Exit(1)
+
+    # Read CSV
+    with open(source_csv, encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    if not rows:
+        typer.echo("No files found in CSV.")
+        raise typer.Exit(0)
+
+    typer.echo(f"Source CSV: {source_csv}")
+    typer.echo(f"Target:     {target}")
+    typer.echo(f"Mode:       {mode}")
+    typer.echo(f"Dry-run:    {dry_run}")
+    typer.echo(f"Transcripts: {include_transcripts}")
+    typer.echo(f"\nProcessing {len(rows)} files...\n")
+
+    # Stats
+    stats = {"success": 0, "skipped": 0, "error": 0}
+    log_entries: list[str] = []
+    log_entries.append(f"Copy Log - {datetime.now().isoformat()}")
+    log_entries.append(f"Source: {source_csv}")
+    log_entries.append(f"Target: {target}")
+    log_entries.append(f"Mode: {mode}, Dry-run: {dry_run}, Transcripts: {include_transcripts}")
+    log_entries.append("=" * 60)
+
+    for idx, row in enumerate(rows, 1):
+        original_path = Path(row.get("path", ""))
+        text_path_str = row.get("text_path", "")
+        text_path = Path(text_path_str) if text_path_str else None
+
+        # Determine destination folder (final_destination > suggested_destination)
+        destination = row.get("final_destination") or row.get("suggested_destination") or "Sonstiges"
+
+        # Use versioned_name if available, else original filename
+        filename = row.get("versioned_name") or original_path.name
+
+        # Build target path
+        target_folder = target / destination
+        target_file = target_folder / filename
+
+        # Check source exists
+        if not original_path.exists():
+            status = "SKIP (source missing)"
+            stats["skipped"] += 1
+            log_entries.append(f"[SKIP] {original_path} -> source not found")
+            typer.echo(f"  [{idx}/{len(rows)}] SKIP (missing): {original_path.name}")
+            continue
+
+        # Check if already exists at target
+        if target_file.exists():
+            status = "SKIP (exists)"
+            stats["skipped"] += 1
+            log_entries.append(f"[SKIP] {original_path} -> {target_file} (already exists)")
+            typer.echo(f"  [{idx}/{len(rows)}] SKIP (exists): {filename}")
+            continue
+
+        # Dry-run: just show
+        if dry_run:
+            action = "COPY" if mode == "copy" else "MOVE"
+            typer.echo(f"  [{idx}/{len(rows)}] {action}: {original_path.name}")
+            typer.echo(f"           -> {target_file}")
+            if include_transcripts and text_path and text_path.exists():
+                transcript_target = target_folder / (Path(filename).stem + ".txt")
+                typer.echo(f"           +T {transcript_target.name}")
+            stats["success"] += 1
+            log_entries.append(f"[DRY-RUN] {original_path} -> {target_file}")
+            continue
+
+        # Actually copy/move
+        try:
+            # Create target folder
+            target_folder.mkdir(parents=True, exist_ok=True)
+
+            if mode == "copy":
+                shutil.copy2(original_path, target_file)
+                action = "COPIED"
+            else:
+                shutil.move(str(original_path), str(target_file))
+                action = "MOVED"
+
+            log_entries.append(f"[{action}] {original_path} -> {target_file}")
+
+            # Copy transcript if requested
+            if include_transcripts and text_path and text_path.exists():
+                transcript_target = target_folder / (Path(filename).stem + ".txt")
+                shutil.copy2(text_path, transcript_target)
+                log_entries.append(f"[TRANSCRIPT] {text_path} -> {transcript_target}")
+
+            stats["success"] += 1
+            typer.echo(f"  [{idx}/{len(rows)}] {action}: {filename} -> {destination}")
+
+        except Exception as e:
+            stats["error"] += 1
+            log_entries.append(f"[ERROR] {original_path} -> {e}")
+            typer.echo(f"  [{idx}/{len(rows)}] ERROR: {filename} - {e}")
+
+    # Summary
+    typer.echo(f"\n{'=' * 40}")
+    typer.echo(f"Done!")
+    typer.echo(f"  Success: {stats['success']}")
+    typer.echo(f"  Skipped: {stats['skipped']}")
+    typer.echo(f"  Errors:  {stats['error']}")
+
+    # Write log file
+    if not dry_run:
+        log_path = target / "copy_log.txt"
+        log_entries.append("=" * 60)
+        log_entries.append(f"Summary: {stats['success']} success, {stats['skipped']} skipped, {stats['error']} errors")
+        target.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("\n".join(log_entries), encoding="utf-8")
+        typer.echo(f"\nLog: {log_path}")
+    else:
+        typer.echo(f"\n[DRY-RUN] No files were copied. Remove --dry-run to execute.")
+
+
 def _write_sorting_plan(path: Path, rows: list[dict], stats: dict, destinations: dict, dup_stats: dict) -> None:
     """Write sorting_plan.md with statistics and suggestions."""
     lines = [

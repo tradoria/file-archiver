@@ -11,6 +11,9 @@ from archiver.web.database import (
     get_all_decisions,
     update_decision_status,
     get_decision_stats,
+    get_chat_history,
+    add_chat_message,
+    clear_chat_history,
 )
 
 # Destination options from sorter.py
@@ -327,3 +330,77 @@ def register_routes(app: Flask) -> None:
         shutil.copy2(text_path, dest_path)
 
         return jsonify({"success": True, "path": str(dest_path)})
+
+    @app.route("/api/chat/<file_hash>", methods=["POST"])
+    def chat(file_hash: str):
+        """Chat with LLM about a file."""
+        from archiver.web.ollama_service import chat_with_context
+
+        data = request.get_json() or {}
+        user_message = data.get("message", "").strip()
+
+        if not user_message:
+            return jsonify({"error": "Keine Nachricht angegeben"}), 400
+
+        csv_data = app.config.get("CSV_DATA", [])
+        row = next((r for r in csv_data if r.get("hash") == file_hash), None)
+
+        if not row:
+            return jsonify({"error": "Datei nicht gefunden"}), 404
+
+        # Read text content
+        text_path = row.get("text_path", "")
+        text_content = ""
+        if text_path and Path(text_path).exists():
+            try:
+                text_content = Path(text_path).read_text(encoding="utf-8")
+            except Exception:
+                text_content = ""
+
+        # Get decision for current destination
+        decision = get_decision(file_hash)
+        current_destination = (
+            decision.get("final_destination") if decision
+            else row.get("suggested_destination", "")
+        )
+
+        # Build file context
+        file_context = {
+            "filename": Path(row.get("path", "")).name,
+            "text_content": text_content,
+            "tags": row.get("tags", ""),
+            "doc_type": row.get("doc_type", ""),
+            "suggested_destination": row.get("suggested_destination", ""),
+            "current_destination": current_destination,
+            "confidence": row.get("confidence", ""),
+            "reason": row.get("reason", ""),
+        }
+
+        # Get chat history
+        history = get_chat_history(file_hash)
+
+        # Save user message
+        add_chat_message(file_hash, "user", user_message)
+
+        # Get LLM response
+        response = chat_with_context(user_message, file_context, history)
+
+        # Save assistant response
+        add_chat_message(file_hash, "assistant", response)
+
+        return jsonify({
+            "response": response,
+            "history": get_chat_history(file_hash),
+        })
+
+    @app.route("/api/chat/<file_hash>/history")
+    def get_chat(file_hash: str):
+        """Get chat history for a file."""
+        history = get_chat_history(file_hash)
+        return jsonify({"history": history})
+
+    @app.route("/api/chat/<file_hash>/clear", methods=["POST"])
+    def clear_chat(file_hash: str):
+        """Clear chat history for a file."""
+        clear_chat_history(file_hash)
+        return jsonify({"success": True})
