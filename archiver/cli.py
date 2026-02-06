@@ -1,0 +1,354 @@
+"""CLI entry point using Typer."""
+
+import csv
+import uuid
+from pathlib import Path
+
+import typer
+import yaml
+
+from archiver.analyzer import analyze_content
+from archiver.extractor import extract_text, WhisperNotAvailableError
+from archiver.metadata import file_meta, save_meta
+from archiver.report import write_report
+from archiver.scanner import scan
+from archiver.sorter import compute_sorting
+
+app = typer.Typer(help="Local File Archiver – scan & extract text from files.")
+
+
+@app.callback()
+def main() -> None:
+    """Local File Archiver – scan files and extract text."""
+
+
+def _load_config(path: Path) -> dict:
+    if path.exists():
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return {}
+
+
+@app.command("scan")
+def scan_cmd(
+    root: Path = typer.Option(None, "--root", "-r", help="Root directory to scan."),
+    config: Path = typer.Option(
+        Path("config.yaml"), "--config", "-c", help="Path to config.yaml."
+    ),
+    limit: int = typer.Option(0, "--limit", "-n", help="Max files to process (0 = all)."),
+) -> None:
+    """Scan a directory, extract text, collect metadata, write report."""
+    cfg = _load_config(config)
+
+    if root is None:
+        root = Path(cfg.get("root_dir", "."))
+    root = root.resolve()
+
+    if not root.is_dir():
+        typer.echo(f"ERROR: {root} is not a directory.", err=True)
+        raise typer.Exit(1)
+
+    artifacts = Path(cfg.get("artifacts_dir", "./artifacts")).resolve()
+    text_dir = artifacts / "text"
+    meta_dir = artifacts / "meta"
+    text_dir.mkdir(parents=True, exist_ok=True)
+    meta_dir.mkdir(parents=True, exist_ok=True)
+
+    ignore = set(cfg.get("ignore_patterns", []))
+    extensions = {e if e.startswith(".") else f".{e}" for e in cfg.get("supported_extensions", [])} or None
+
+    # Whisper config for audio/video transcription
+    whisper_config = {
+        "whisper_enabled": cfg.get("whisper_enabled", True),
+        "whisper_model": cfg.get("whisper_model", "base"),
+    }
+
+    typer.echo(f"Scanning: {root}")
+    files = scan(root, extensions=extensions, ignore=ignore or None)
+    total = len(files)
+    if limit > 0:
+        files = files[:limit]
+    typer.echo(f"Found {total} supported files (processing {len(files)}).\n")
+
+    rows: list[dict] = []
+
+    for filepath in files:
+        file_id = uuid.uuid4().hex[:12]
+        suffix = filepath.suffix.lower()
+        text_path = text_dir / f"{file_id}.txt"
+        meta_path = meta_dir / f"{file_id}.json"
+
+        # metadata
+        meta = file_meta(filepath)
+        meta["id"] = file_id
+        meta["original_name"] = filepath.name
+
+        status = "OK"
+        try:
+            text = extract_text(filepath, whisper_config)
+            text_path.write_text(text, encoding="utf-8")
+            meta["text_file"] = str(text_path)
+        except WhisperNotAvailableError as exc:
+            status = "SKIP_NO_WHISPER"
+            meta["error"] = str(exc)
+        except Exception as exc:
+            status = "ERROR"
+            meta["error"] = str(exc)
+            typer.echo(f"  ERROR extracting {filepath}: {exc}")
+
+        meta["status"] = status
+        save_meta(meta, meta_path)
+
+        rows.append(
+            {
+                "path": str(filepath),
+                "type": suffix,
+                "text_path": str(text_path) if status == "OK" else "",
+                "hash": meta["sha256"],
+                "status": status,
+            }
+        )
+        rel_path = str(filepath.relative_to(root)).encode("ascii", "replace").decode("ascii")
+        typer.echo(f"  [{status}] {rel_path}")
+
+    report_path = artifacts / "report.csv"
+    write_report(rows, report_path)
+    typer.echo(f"\nDone. {len(rows)} files processed.")
+    typer.echo(f"Report:    {report_path}")
+    typer.echo(f"Artifacts: {artifacts}")
+
+
+@app.command("analyze")
+def analyze_cmd(
+    config: Path = typer.Option(
+        Path("config.yaml"), "--config", "-c", help="Path to config.yaml."
+    ),
+    limit: int = typer.Option(0, "--limit", "-n", help="Max files to analyze (0 = all)."),
+) -> None:
+    """Analyze scanned files: generate tags, doc_type, and sorting suggestions."""
+    cfg = _load_config(config)
+    artifacts = Path(cfg.get("artifacts_dir", "./artifacts")).resolve()
+    text_dir = artifacts / "text"
+
+    report_path = artifacts / "report.csv"
+    if not report_path.exists():
+        typer.echo("ERROR: report.csv not found. Run 'scan' first.", err=True)
+        raise typer.Exit(1)
+
+    # Read existing report
+    with open(report_path, encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    if limit > 0:
+        rows = rows[:limit]
+
+    typer.echo(f"Analyzing {len(rows)} files...\n")
+
+    # Build duplicate groups by hash
+    hash_groups: dict[str, list[int]] = {}
+    for idx, row in enumerate(rows):
+        h = row.get("hash", "")
+        if h:
+            if h not in hash_groups:
+                hash_groups[h] = []
+            hash_groups[h].append(idx)
+
+    # Assign duplicate group IDs
+    duplicate_group_map: dict[int, str] = {}
+    group_id = 1
+    for h, indices in hash_groups.items():
+        if len(indices) > 1:
+            gid = f"DUP_{group_id:03d}"
+            for idx in indices:
+                duplicate_group_map[idx] = gid
+            group_id += 1
+
+    # Track filename occurrences for versioning
+    filename_counts: dict[str, int] = {}
+
+    analyzed_rows: list[dict] = []
+    stats = {"OK": 0, "REVIEW": 0}
+    destinations: dict[str, list[str]] = {}
+    dup_stats = {"total_duplicates": 0, "duplicate_groups": group_id - 1}
+
+    for idx, row in enumerate(rows):
+        original_path = row["path"]
+        text_path_str = row.get("text_path", "")
+        text_path = Path(text_path_str) if text_path_str else None
+
+        # Read text content
+        text = ""
+        if text_path and text_path.exists():
+            try:
+                text = text_path.read_text(encoding="utf-8")[:5000]
+            except Exception:
+                pass
+
+        # Analyze content
+        analysis = analyze_content(text_path, original_path) if text_path else {"tags": [], "doc_type": "Sonstiges"}
+
+        # Compute sorting
+        sorting = compute_sorting(
+            original_path=original_path,
+            text=text,
+            tags=analysis["tags"],
+            doc_type=analysis["doc_type"],
+        )
+
+        # Filename versioning
+        original_filename = Path(original_path).name
+        base_name = original_filename
+        if base_name in filename_counts:
+            filename_counts[base_name] += 1
+            # Add version number
+            stem = Path(base_name).stem
+            suffix = Path(base_name).suffix
+            versioned_name = f"{stem}_{filename_counts[base_name]:03d}{suffix}"
+        else:
+            filename_counts[base_name] = 1
+            versioned_name = base_name
+
+        # Duplicate group
+        dup_group = duplicate_group_map.get(idx, "")
+        if dup_group:
+            dup_stats["total_duplicates"] += 1
+
+        # Build analyzed row
+        analyzed_row = {
+            **row,
+            "tags": ";".join(analysis["tags"]),
+            "doc_type": analysis["doc_type"],
+            "folder_prior": sorting["folder_prior"],
+            "suggested_destination": sorting["suggested_destination"],
+            "confidence": sorting["confidence"],
+            "reason": sorting["reason"],
+            "analysis_status": sorting["analysis_status"],
+            "duplicate_group": dup_group,
+            "versioned_name": versioned_name,
+        }
+        analyzed_rows.append(analyzed_row)
+
+        # Stats
+        stats[sorting["analysis_status"]] += 1
+        dest = sorting["suggested_destination"]
+        if dest not in destinations:
+            destinations[dest] = []
+        destinations[dest].append(versioned_name)
+
+        # Progress
+        filename_display = original_filename.encode("ascii", "replace").decode("ascii")
+        dup_marker = f" [{dup_group}]" if dup_group else ""
+        typer.echo(f"  [{sorting['analysis_status']}] {filename_display} -> {dest} ({sorting['confidence']}){dup_marker}")
+
+    # Write analyzed report
+    analyzed_path = artifacts / "report_analyzed.csv"
+    fieldnames = [
+        "path", "type", "text_path", "hash", "status",
+        "tags", "doc_type", "folder_prior", "suggested_destination",
+        "confidence", "reason", "analysis_status",
+        "duplicate_group", "versioned_name",
+    ]
+    with open(analyzed_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(analyzed_rows)
+
+    # Write sorting plan
+    plan_path = artifacts / "sorting_plan.md"
+    _write_sorting_plan(plan_path, analyzed_rows, stats, destinations, dup_stats)
+
+    typer.echo(f"\nDone. {len(analyzed_rows)} files analyzed.")
+    typer.echo(f"  OK: {stats['OK']}, REVIEW: {stats['REVIEW']}")
+    typer.echo(f"  Duplikate: {dup_stats['total_duplicates']} Dateien in {dup_stats['duplicate_groups']} Gruppen")
+    typer.echo(f"\nOutputs:")
+    typer.echo(f"  Report:  {analyzed_path}")
+    typer.echo(f"  Plan:    {plan_path}")
+
+
+@app.command("serve")
+def serve_cmd(
+    port: int = typer.Option(5000, "--port", "-p", help="Port to run the server on."),
+    config: Path = typer.Option(
+        Path("config.yaml"), "--config", "-c", help="Path to config.yaml."
+    ),
+) -> None:
+    """Start the web review interface."""
+    from archiver.web.app import create_app
+
+    cfg = _load_config(config)
+    flask_app = create_app(cfg)
+    typer.echo(f"Starting review interface at http://localhost:{port}")
+    flask_app.run(host="0.0.0.0", port=port, debug=True)
+
+
+def _write_sorting_plan(path: Path, rows: list[dict], stats: dict, destinations: dict, dup_stats: dict) -> None:
+    """Write sorting_plan.md with statistics and suggestions."""
+    lines = [
+        "# Sorting Plan",
+        "",
+        "## Statistik",
+        "",
+        f"- **Analysiert:** {len(rows)} Dateien",
+        f"- **OK (confidence >= 0.6):** {stats['OK']}",
+        f"- **REVIEW (confidence < 0.6):** {stats['REVIEW']}",
+        f"- **Duplikate:** {dup_stats['total_duplicates']} Dateien in {dup_stats['duplicate_groups']} Gruppen",
+        "",
+        "## Sortiervorschläge nach Zielordner",
+        "",
+    ]
+
+    for dest, files in sorted(destinations.items()):
+        lines.append(f"### {dest} ({len(files)} Dateien)")
+        lines.append("")
+        for fname in files[:10]:  # Max 10 per category in summary
+            lines.append(f"- {fname}")
+        if len(files) > 10:
+            lines.append(f"- ... und {len(files) - 10} weitere")
+        lines.append("")
+
+    # Duplicate groups section
+    dup_rows = [r for r in rows if r.get("duplicate_group")]
+    if dup_rows:
+        lines.append("## Duplikat-Gruppen (gleicher Hash)")
+        lines.append("")
+        # Group by duplicate_group
+        dup_groups: dict[str, list[dict]] = {}
+        for r in dup_rows:
+            g = r["duplicate_group"]
+            if g not in dup_groups:
+                dup_groups[g] = []
+            dup_groups[g].append(r)
+
+        for gid, items in sorted(dup_groups.items()):
+            lines.append(f"### {gid} ({len(items)} Dateien)")
+            lines.append("")
+            for item in items:
+                fname = Path(item["path"]).name
+                lines.append(f"- {fname}")
+                lines.append(f"  - Pfad: `{item['path']}`")
+            lines.append("")
+
+    # Review list (exclude duplicates to reduce noise)
+    seen_names = set()
+    review_items = []
+    for r in rows:
+        if r["analysis_status"] == "REVIEW":
+            fname = Path(r["path"]).name
+            if fname not in seen_names:
+                review_items.append(r)
+                seen_names.add(fname)
+
+    if review_items:
+        lines.append("## Review-Liste (manuelle Prüfung empfohlen)")
+        lines.append("")
+        lines.append(f"*{len(review_items)} eindeutige Dateien (Duplikate zusammengefasst)*")
+        lines.append("")
+        for item in review_items:
+            fname = Path(item["path"]).name
+            dup_marker = f" **[{item['duplicate_group']}]**" if item.get("duplicate_group") else ""
+            lines.append(f"- **{fname}**{dup_marker}")
+            lines.append(f"  - Vorschlag: {item['suggested_destination']} (Confidence: {item['confidence']})")
+            lines.append(f"  - Grund: {item['reason']}")
+            lines.append("")
+
+    path.write_text("\n".join(lines), encoding="utf-8")

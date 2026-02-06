@@ -1,0 +1,31 @@
+root_dir: ./meine_dateien
+
+ignore_patterns:
+  - node_modules
+  - .git
+  - __pycache__
+  - .cache
+
+supported_extensions:
+  # Documents
+  - .md
+  - .txt
+  - .pdf
+  - .docx
+  # Audio
+  - .mp3
+  - .m4a
+  - .wav
+  - .ogg
+  # Video
+  - .mp4
+  - .mkv
+  - .avi
+  - .mov
+  - .webm
+
+artifacts_dir: ./artifacts
+
+# Whisper transcription settings
+whisper_enabled: true
+whisper_model: base  # Options: tiny, base, small, medium, large

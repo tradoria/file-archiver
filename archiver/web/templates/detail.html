@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+
+{% block title %}{{ file.filename }} - Review{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="/" class="text-blue-600 hover:underline">&larr; Zuruck zum Dashboard</a>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Main Content -->
+    <div class="lg:col-span-2 space-y-6">
+        <!-- File Info -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <h1 class="text-xl font-bold text-gray-800 mb-4">{{ file.filename }}</h1>
+
+            <div class="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                    <span class="text-gray-500">Typ:</span>
+                    <span class="font-medium">{{ file.type }}</span>
+                </div>
+                <div>
+                    <span class="text-gray-500">Doc-Type:</span>
+                    <span class="font-medium">{{ file.doc_type }}</span>
+                </div>
+                <div class="col-span-2">
+                    <span class="text-gray-500">Pfad:</span>
+                    <span class="font-mono text-xs break-all">{{ file.path }}</span>
+                </div>
+            </div>
+
+            {% if file.tags %}
+            <div class="mt-4">
+                <span class="text-gray-500 text-sm">Tags:</span>
+                <div class="mt-1">
+                    {% for tag in file.tags %}
+                    <span class="tag">{{ tag }}</span>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+
+            {% if file.duplicate_group %}
+            <div class="mt-4 bg-purple-50 border border-purple-200 rounded p-3">
+                <span class="text-purple-800 font-medium">Duplikat-Gruppe: {{ file.duplicate_group }}</span>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- LLM Summary -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-semibold text-gray-800">KI-Zusammenfassung</h2>
+                <button onclick="loadSummary('{{ file.hash }}')" class="text-blue-600 hover:underline text-sm">
+                    Neu laden
+                </button>
+            </div>
+            <div id="summary-container" class="text-gray-700">
+                <div class="text-gray-500">Klicken Sie "Laden" um die Zusammenfassung zu generieren.</div>
+            </div>
+            <button onclick="loadSummary('{{ file.hash }}')" class="mt-4 btn btn-secondary">
+                Zusammenfassung laden
+            </button>
+        </div>
+
+        <!-- Text Preview -->
+        {% if text_preview %}
+        <div class="bg-white rounded-lg shadow p-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">Textvorschau</h2>
+            <pre class="bg-gray-50 p-4 rounded text-sm text-gray-700 whitespace-pre-wrap max-h-64 overflow-y-auto">{{ text_preview }}</pre>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Sidebar -->
+    <div class="space-y-6">
+        <!-- Sorting Suggestion -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">Sortiervorschlag</h2>
+
+            <div class="space-y-3">
+                <div>
+                    <span class="text-gray-500 text-sm">Vorgeschlagen:</span>
+                    <div class="font-medium text-blue-600">{{ file.suggested_destination }}</div>
+                </div>
+                <div>
+                    <span class="text-gray-500 text-sm">Confidence:</span>
+                    <div class="font-medium {% if file.confidence|float >= 0.6 %}text-green-600{% else %}text-orange-600{% endif %}">
+                        {{ file.confidence }}
+                    </div>
+                </div>
+                <div>
+                    <span class="text-gray-500 text-sm">Grund:</span>
+                    <div class="text-sm text-gray-700">{{ file.reason }}</div>
+                </div>
+            </div>
+
+            {% if file.decision_status == 'APPROVED' %}
+            <div class="mt-4 bg-green-50 border border-green-200 rounded p-3">
+                <div class="text-green-800 font-medium">Entschieden: {{ file.action_type }}</div>
+                <div class="text-green-700 text-sm">Ziel: {{ file.final_destination }}</div>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Actions -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">Aktionen</h2>
+
+            <div class="space-y-3">
+                <button onclick="handleAction('accept')" class="w-full btn btn-success">
+                    Akzeptieren
+                </button>
+
+                <div class="border-t pt-3">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Zielordner andern:</label>
+                    <select id="destination-select" class="w-full border rounded px-3 py-2 mb-2">
+                        {% for dest in destinations %}
+                        <option value="{{ dest }}" {% if dest == file.final_destination %}selected{% endif %}>
+                            {{ dest }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <button onclick="handleAction('change')" class="w-full btn btn-primary">
+                        Mit neuem Ziel speichern
+                    </button>
+                </div>
+
+                <div class="border-t pt-3">
+                    <button onclick="handleAction('scrapyard')" class="w-full btn btn-danger">
+                        Schrottplatz
+                    </button>
+                </div>
+
+                <div class="border-t pt-3">
+                    <button onclick="handleAction('skip')" class="w-full btn btn-secondary">
+                        Uberspringen
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Export -->
+        {% if file.text_path %}
+        <div class="bg-white rounded-lg shadow p-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">Export</h2>
+            <button onclick="exportTranscript('{{ file.hash }}')" class="w-full btn btn-secondary">
+                Transkript exportieren
+            </button>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function handleAction(action) {
+    const destination = document.getElementById('destination-select')?.value;
+    const result = await submitDecision('{{ file.hash }}', action, destination);
+
+    if (result.success) {
+        {% if next_hash %}
+        window.location = '/review/{{ next_hash }}';
+        {% else %}
+        window.location = '/';
+        {% endif %}
+    } else {
+        alert('Fehler: ' + (result.error || 'Unbekannt'));
+    }
+}
+</script>
+{% endblock %}

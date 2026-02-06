@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}File Archiver{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .tag { @apply inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded mr-1 mb-1; }
+        .btn { @apply px-4 py-2 rounded font-medium transition-colors; }
+        .btn-primary { @apply bg-blue-600 text-white hover:bg-blue-700; }
+        .btn-success { @apply bg-green-600 text-white hover:bg-green-700; }
+        .btn-danger { @apply bg-red-600 text-white hover:bg-red-700; }
+        .btn-secondary { @apply bg-gray-200 text-gray-800 hover:bg-gray-300; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <nav class="bg-blue-600 text-white shadow-lg">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <a href="/" class="font-bold text-xl">File Archiver - Review</a>
+            <div class="flex gap-4">
+                <a href="/export/csv" class="bg-white text-blue-600 px-4 py-2 rounded hover:bg-blue-50 transition-colors">
+                    Export CSV
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="container mx-auto px-4 py-6">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="mb-4 p-4 rounded {% if category == 'error' %}bg-red-100 text-red-800{% else %}bg-green-100 text-green-800{% endif %}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <script>
+        async function submitDecision(fileHash, action, destination = null) {
+            const body = { action };
+            if (destination) body.destination = destination;
+
+            const response = await fetch(`/api/decision/${fileHash}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+
+            return response.json();
+        }
+
+        async function loadSummary(fileHash) {
+            const container = document.getElementById('summary-container');
+            container.innerHTML = '<div class="text-gray-500">Lade Zusammenfassung...</div>';
+
+            try {
+                const response = await fetch(`/api/summary/${fileHash}`);
+                const data = await response.json();
+                container.innerHTML = `<p class="text-gray-700">${data.summary || data.error}</p>`;
+            } catch (e) {
+                container.innerHTML = `<p class="text-red-600">Fehler beim Laden: ${e.message}</p>`;
+            }
+        }
+
+        async function exportTranscript(fileHash) {
+            try {
+                const response = await fetch(`/export/transcript/${fileHash}`, { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    alert('Transkript exportiert nach: ' + data.path);
+                } else {
+                    alert('Fehler: ' + data.error);
+                }
+            } catch (e) {
+                alert('Fehler: ' + e.message);
+            }
+        }
+    </script>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>
