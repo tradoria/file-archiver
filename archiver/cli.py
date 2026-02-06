@@ -117,6 +117,151 @@ def scan_cmd(
     typer.echo(f"Artifacts: {artifacts}")
 
 
+@app.command("scan-batch")
+def scan_batch_cmd(
+    roots: list[str] = typer.Option(None, "--roots", "-r", help="List of root directories to scan."),
+    use_config: bool = typer.Option(False, "--use-config", "-C", help="Read scan_roots from config.yaml."),
+    config: Path = typer.Option(
+        Path("config.yaml"), "--config", "-c", help="Path to config.yaml."
+    ),
+    limit: int = typer.Option(0, "--limit", "-n", help="Max total files to process (0 = all)."),
+) -> None:
+    """Batch scan multiple directories into a single report."""
+    cfg = _load_config(config)
+
+    # Determine roots
+    scan_roots: list[Path] = []
+    if use_config:
+        config_roots = cfg.get("scan_roots", [])
+        scan_roots = [Path(r).resolve() for r in config_roots if r and not r.strip().startswith("#")]
+    if roots:
+        scan_roots.extend([Path(r).resolve() for r in roots])
+
+    if not scan_roots:
+        typer.echo("ERROR: No roots specified. Use --roots or --use-config with scan_roots in config.yaml.", err=True)
+        raise typer.Exit(1)
+
+    # Validate roots
+    valid_roots = []
+    for root in scan_roots:
+        if root.is_dir():
+            valid_roots.append(root)
+        else:
+            typer.echo(f"WARNING: Skipping invalid directory: {root}")
+
+    if not valid_roots:
+        typer.echo("ERROR: No valid directories found.", err=True)
+        raise typer.Exit(1)
+
+    artifacts = Path(cfg.get("artifacts_dir", "./artifacts")).resolve()
+    text_dir = artifacts / "text"
+    meta_dir = artifacts / "meta"
+    text_dir.mkdir(parents=True, exist_ok=True)
+    meta_dir.mkdir(parents=True, exist_ok=True)
+
+    ignore = set(cfg.get("ignore_patterns", []))
+    extensions = {e if e.startswith(".") else f".{e}" for e in cfg.get("supported_extensions", [])} or None
+
+    whisper_config = {
+        "whisper_enabled": cfg.get("whisper_enabled", True),
+        "whisper_model": cfg.get("whisper_model", "base"),
+    }
+
+    typer.echo(f"Batch Scan: {len(valid_roots)} directories")
+    for r in valid_roots:
+        typer.echo(f"  - {r}")
+    typer.echo("")
+
+    # Collect all files from all roots
+    all_files: list[tuple[Path, Path]] = []  # (filepath, source_root)
+    for root in valid_roots:
+        typer.echo(f"Discovering files in: {root}")
+        files = scan(root, extensions=extensions, ignore=ignore or None)
+        typer.echo(f"  Found {len(files)} files")
+        all_files.extend([(f, root) for f in files])
+
+    total_found = len(all_files)
+    typer.echo(f"\nTotal: {total_found} files across all directories")
+
+    if limit > 0:
+        all_files = all_files[:limit]
+        typer.echo(f"Processing first {len(all_files)} files (limit: {limit})")
+
+    typer.echo("")
+
+    # Deduplicate by hash (process each unique file only once)
+    seen_hashes: dict[str, dict] = {}  # hash -> row data
+    rows: list[dict] = []
+    processed = 0
+    skipped_duplicates = 0
+
+    for filepath, source_root in all_files:
+        processed += 1
+        file_id = uuid.uuid4().hex[:12]
+        suffix = filepath.suffix.lower()
+        text_path = text_dir / f"{file_id}.txt"
+        meta_path = meta_dir / f"{file_id}.json"
+
+        # Get metadata first to check hash
+        meta = file_meta(filepath)
+        file_hash = meta["sha256"]
+
+        # Check for duplicate
+        if file_hash in seen_hashes:
+            skipped_duplicates += 1
+            rel_path = str(filepath.relative_to(source_root)).encode("ascii", "replace").decode("ascii")
+            typer.echo(f"  [{processed}/{len(all_files)}] [DUP] {rel_path}")
+            continue
+
+        meta["id"] = file_id
+        meta["original_name"] = filepath.name
+
+        status = "OK"
+        try:
+            text = extract_text(filepath, whisper_config)
+            text_path.write_text(text, encoding="utf-8")
+            meta["text_file"] = str(text_path)
+        except WhisperNotAvailableError as exc:
+            status = "SKIP_NO_WHISPER"
+            meta["error"] = str(exc)
+        except Exception as exc:
+            status = "ERROR"
+            meta["error"] = str(exc)
+
+        meta["status"] = status
+        save_meta(meta, meta_path)
+
+        row = {
+            "path": str(filepath),
+            "type": suffix,
+            "text_path": str(text_path) if status == "OK" else "",
+            "hash": file_hash,
+            "status": status,
+            "source_root": str(source_root),
+        }
+        rows.append(row)
+        seen_hashes[file_hash] = row
+
+        rel_path = str(filepath.relative_to(source_root)).encode("ascii", "replace").decode("ascii")
+        typer.echo(f"  [{processed}/{len(all_files)}] [{status}] {rel_path}")
+
+    # Write report with source_root column
+    report_path = artifacts / "report.csv"
+    fieldnames = ["path", "type", "text_path", "hash", "status", "source_root"]
+    with open(report_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    typer.echo(f"\n{'=' * 40}")
+    typer.echo(f"Done!")
+    typer.echo(f"  Processed: {len(rows)} unique files")
+    typer.echo(f"  Skipped:   {skipped_duplicates} duplicates")
+    typer.echo(f"  Total:     {processed} files checked")
+    typer.echo(f"\nReport:    {report_path}")
+    typer.echo(f"Artifacts: {artifacts}")
+
+
 @app.command("analyze")
 def analyze_cmd(
     config: Path = typer.Option(

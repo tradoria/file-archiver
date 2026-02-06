@@ -33,3 +33,9 @@ whisper_model: base  # Options: tiny, base, small, medium, large
 # LLM-based sorting (requires Ollama)
 llm_sorting: false
 llm_sorting_model: gemma3:4b  # Smaller, faster model for sorting
+
+# Batch scan roots (for scan-batch --use-config)
+scan_roots:
+  # - C:\Users\CKBaumgarten\Documents
+  # - C:\Users\CKBaumgarten\Downloads
+  # - C:\Users\CKBaumgarten\Desktop
