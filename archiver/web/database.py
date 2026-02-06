@@ -67,10 +67,23 @@ def init_db() -> None:
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS llm_sorting (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_hash TEXT NOT NULL UNIQUE,
+            suggested_destination TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            reason TEXT NOT NULL,
+            model TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_hash ON decisions(file_hash)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_status ON decisions(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_summaries_hash ON summaries(file_hash)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_file_hash ON chat_messages(file_hash)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_llm_sorting_hash ON llm_sorting(file_hash)")
 
     conn.commit()
     conn.close()
@@ -224,5 +237,43 @@ def clear_chat_history(file_hash: str) -> None:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM chat_messages WHERE file_hash = ?", (file_hash,))
+    conn.commit()
+    conn.close()
+
+
+# LLM Sorting Cache
+
+def get_cached_llm_sorting(file_hash: str) -> Optional[dict]:
+    """Get cached LLM sorting suggestion."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT suggested_destination, confidence, reason, model FROM llm_sorting WHERE file_hash = ?",
+        (file_hash,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def cache_llm_sorting(
+    file_hash: str,
+    suggested_destination: str,
+    confidence: float,
+    reason: str,
+    model: str,
+) -> None:
+    """Cache an LLM sorting suggestion."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO llm_sorting (file_hash, suggested_destination, confidence, reason, model)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(file_hash) DO UPDATE SET
+            suggested_destination = excluded.suggested_destination,
+            confidence = excluded.confidence,
+            reason = excluded.reason,
+            model = excluded.model
+    """, (file_hash, suggested_destination, confidence, reason, model))
     conn.commit()
     conn.close()

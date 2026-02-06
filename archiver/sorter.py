@@ -169,11 +169,32 @@ def compute_sorting(
     text: str,
     tags: list[str],
     doc_type: str,
+    use_llm: bool = False,
+    llm_config: dict | None = None,
+    file_hash: str | None = None,
 ) -> dict:
     """Compute full sorting suggestion."""
     filename = Path(original_path).name
     folder_prior = extract_folder_prior(original_path)
 
+    # Try LLM-based sorting if enabled
+    if use_llm and text and file_hash:
+        llm_result = llm_suggest_destination(
+            text=text,
+            filename=filename,
+            file_hash=file_hash,
+            llm_config=llm_config or {},
+        )
+        if llm_result:
+            return {
+                "folder_prior": folder_prior or "",
+                "suggested_destination": llm_result["destination"],
+                "confidence": llm_result["confidence"],
+                "reason": f"[LLM] {llm_result['reason']}",
+                "analysis_status": "OK" if llm_result["confidence"] >= 0.6 else "REVIEW",
+            }
+
+    # Fallback to keyword heuristics
     suggested_dest, confidence, reason = suggest_destination(text, filename, original_path, folder_prior)
 
     # Review-Status
@@ -186,3 +207,126 @@ def compute_sorting(
         "reason": reason,
         "analysis_status": status,
     }
+
+
+# All available categories for LLM
+ALL_CATEGORIES = [
+    "01 Grundwissen LLM",
+    "02 Analyse Unternehmensstruktur und Prozesse",
+    "03 KI Konzepte und Geschaeftsfeldentwicklung",
+    "04 Prompt Engineering",
+    "05 KI Tools und Plattformen",
+    "06 Datenschutz und Compliance",
+    "07 Implementierung und Rollout",
+    "08 KPIs und Erfolgsmessung",
+    "Prompts-Sammlung",
+    "Tools-und-Workflows",
+    "Rechtliches",
+    "Sonstiges",
+    "Schrottplatz/Systemdateien",
+]
+
+
+def llm_suggest_destination(
+    text: str,
+    filename: str,
+    file_hash: str,
+    llm_config: dict,
+) -> dict | None:
+    """
+    Use LLM to suggest destination folder.
+    Returns: {"destination": str, "confidence": float, "reason": str} or None on failure.
+    """
+    import requests
+
+    # Check cache first
+    try:
+        from archiver.web.database import get_cached_llm_sorting, cache_llm_sorting, init_db, set_db_path
+        from pathlib import Path as P
+
+        # Ensure DB is initialized
+        artifacts_dir = P(llm_config.get("artifacts_dir", "./artifacts")).resolve()
+        db_path = artifacts_dir / "archiver.db"
+        set_db_path(db_path)
+        init_db()
+
+        cached = get_cached_llm_sorting(file_hash)
+        if cached:
+            return {
+                "destination": cached["suggested_destination"],
+                "confidence": cached["confidence"],
+                "reason": cached["reason"],
+            }
+    except Exception:
+        pass  # Continue without cache
+
+    model = llm_config.get("llm_sorting_model", "gemma3:4b")
+    ollama_url = "http://localhost:11434/api/generate"
+
+    # Build prompt
+    categories_list = "\n".join(f"- {cat}" for cat in ALL_CATEGORIES)
+    text_excerpt = text[:1500]
+
+    prompt = f"""Du bist ein Datei-Klassifizierer. Analysiere die folgende Datei und waehle die passendste Kategorie.
+
+DATEINAME: {filename}
+
+INHALT (Auszug):
+{text_excerpt}
+
+VERFUEGBARE KATEGORIEN:
+{categories_list}
+
+Antworte NUR im folgenden Format (keine andere Ausgabe):
+KATEGORIE: <exakter Kategoriename>
+CONFIDENCE: <0.0-1.0>
+GRUND: <kurze Begruendung>"""
+
+    try:
+        response = requests.post(
+            ollama_url,
+            json={"model": model, "prompt": prompt, "stream": False},
+            timeout=60,
+        )
+        response.raise_for_status()
+        result = response.json().get("response", "")
+
+        # Parse response
+        destination = "Sonstiges"
+        confidence = 0.5
+        reason = "LLM-Analyse"
+
+        for line in result.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("KATEGORIE:"):
+                dest = line.replace("KATEGORIE:", "").strip()
+                # Validate against known categories
+                for cat in ALL_CATEGORIES:
+                    if cat.lower() == dest.lower() or cat in dest:
+                        destination = cat
+                        break
+            elif line.startswith("CONFIDENCE:"):
+                try:
+                    conf = float(line.replace("CONFIDENCE:", "").strip())
+                    confidence = max(0.0, min(1.0, conf))
+                except ValueError:
+                    pass
+            elif line.startswith("GRUND:"):
+                reason = line.replace("GRUND:", "").strip()
+
+        # Cache result
+        try:
+            cache_llm_sorting(file_hash, destination, confidence, reason, model)
+        except Exception:
+            pass
+
+        return {
+            "destination": destination,
+            "confidence": round(confidence, 2),
+            "reason": reason,
+        }
+
+    except requests.exceptions.ConnectionError:
+        return None  # Fallback to heuristics
+    except Exception:
+        return None  # Fallback to heuristics

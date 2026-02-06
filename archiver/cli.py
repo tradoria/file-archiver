@@ -123,11 +123,21 @@ def analyze_cmd(
         Path("config.yaml"), "--config", "-c", help="Path to config.yaml."
     ),
     limit: int = typer.Option(0, "--limit", "-n", help="Max files to analyze (0 = all)."),
+    use_llm: bool = typer.Option(False, "--use-llm", "-L", help="Use LLM for sorting suggestions."),
 ) -> None:
     """Analyze scanned files: generate tags, doc_type, and sorting suggestions."""
     cfg = _load_config(config)
     artifacts = Path(cfg.get("artifacts_dir", "./artifacts")).resolve()
     text_dir = artifacts / "text"
+
+    # LLM config
+    llm_enabled = use_llm or cfg.get("llm_sorting", False)
+    llm_config = {
+        "llm_sorting_model": cfg.get("llm_sorting_model", "gemma3:4b"),
+        "artifacts_dir": str(artifacts),
+    }
+    if llm_enabled:
+        typer.echo(f"LLM-Sortierung aktiviert (Model: {llm_config['llm_sorting_model']})")
 
     report_path = artifacts / "report.csv"
     if not report_path.exists():
@@ -193,6 +203,9 @@ def analyze_cmd(
             text=text,
             tags=analysis["tags"],
             doc_type=analysis["doc_type"],
+            use_llm=llm_enabled,
+            llm_config=llm_config,
+            file_hash=row.get("hash", ""),
         )
 
         # Filename versioning

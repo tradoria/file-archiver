@@ -29,3 +29,7 @@ artifacts_dir: ./artifacts
 # Whisper transcription settings
 whisper_enabled: true
 whisper_model: base  # Options: tiny, base, small, medium, large
+
+# LLM-based sorting (requires Ollama)
+llm_sorting: false
+llm_sorting_model: gemma3:4b  # Smaller, faster model for sorting
