@@ -79,11 +79,22 @@ def init_db() -> None:
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS scanned_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_hash TEXT NOT NULL UNIQUE,
+            file_path TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            scan_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_hash ON decisions(file_hash)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_status ON decisions(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_summaries_hash ON summaries(file_hash)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_file_hash ON chat_messages(file_hash)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_llm_sorting_hash ON llm_sorting(file_hash)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_scanned_files_hash ON scanned_files(file_hash)")
 
     conn.commit()
     conn.close()
@@ -277,3 +288,53 @@ def cache_llm_sorting(
     """, (file_hash, suggested_destination, confidence, reason, model))
     conn.commit()
     conn.close()
+
+
+# Scanned Files Cache (for incremental scan)
+
+def is_file_scanned(file_hash: str) -> bool:
+    """Check if file was already scanned."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM scanned_files WHERE file_hash = ?", (file_hash,))
+    result = cursor.fetchone() is not None
+    conn.close()
+    return result
+
+
+def mark_file_scanned(file_hash: str, file_path: str, file_size: int) -> None:
+    """Mark file as scanned."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO scanned_files (file_hash, file_path, file_size)
+        VALUES (?, ?, ?)
+        ON CONFLICT(file_hash) DO UPDATE SET
+            file_path = excluded.file_path,
+            file_size = excluded.file_size,
+            scan_date = CURRENT_TIMESTAMP
+    """, (file_hash, file_path, file_size))
+    conn.commit()
+    conn.close()
+
+
+def clear_scanned_files() -> int:
+    """Clear all scanned files cache. Returns count of deleted entries."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM scanned_files")
+    count = cursor.fetchone()[0]
+    cursor.execute("DELETE FROM scanned_files")
+    conn.commit()
+    conn.close()
+    return count
+
+
+def get_scanned_files_count() -> int:
+    """Get count of scanned files in cache."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM scanned_files")
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count

@@ -35,6 +35,8 @@ def scan_cmd(
         Path("config.yaml"), "--config", "-c", help="Path to config.yaml."
     ),
     limit: int = typer.Option(0, "--limit", "-n", help="Max files to process (0 = all)."),
+    force: bool = typer.Option(False, "--force", "-f", help="Force rescan, ignore cache."),
+    incremental: bool = typer.Option(True, "--incremental", "-i", help="Only scan new/changed files (default)."),
 ) -> None:
     """Scan a directory, extract text, collect metadata, write report."""
     cfg = _load_config(config)
@@ -53,6 +55,12 @@ def scan_cmd(
     text_dir.mkdir(parents=True, exist_ok=True)
     meta_dir.mkdir(parents=True, exist_ok=True)
 
+    # Initialize scan cache DB
+    from archiver.web.database import init_db, set_db_path, is_file_scanned, mark_file_scanned
+    db_path = artifacts / "archiver.db"
+    set_db_path(db_path)
+    init_db()
+
     ignore = set(cfg.get("ignore_patterns", []))
     extensions = {e if e.startswith(".") else f".{e}" for e in cfg.get("supported_extensions", [])} or None
 
@@ -62,6 +70,12 @@ def scan_cmd(
         "whisper_model": cfg.get("whisper_model", "base"),
     }
 
+    use_cache = incremental and not force
+    if force:
+        typer.echo("Force-Modus: Cache wird ignoriert")
+    elif use_cache:
+        typer.echo("Incremental-Modus: Nur neue/geaenderte Dateien")
+
     typer.echo(f"Scanning: {root}")
     files = scan(root, extensions=extensions, ignore=ignore or None)
     total = len(files)
@@ -70,15 +84,25 @@ def scan_cmd(
     typer.echo(f"Found {total} supported files (processing {len(files)}).\n")
 
     rows: list[dict] = []
+    stats = {"processed": 0, "skipped": 0, "new": 0}
 
-    for filepath in files:
-        file_id = uuid.uuid4().hex[:12]
+    for idx, filepath in enumerate(files, 1):
         suffix = filepath.suffix.lower()
+
+        # Get hash BEFORE extraction (for incremental check)
+        meta = file_meta(filepath)
+        file_hash = meta["sha256"]
+        file_size = meta.get("size_bytes", 0)
+
+        # Check if already scanned (incremental mode)
+        if use_cache and is_file_scanned(file_hash):
+            stats["skipped"] += 1
+            continue
+
+        file_id = uuid.uuid4().hex[:12]
         text_path = text_dir / f"{file_id}.txt"
         meta_path = meta_dir / f"{file_id}.json"
 
-        # metadata
-        meta = file_meta(filepath)
         meta["id"] = file_id
         meta["original_name"] = filepath.name
 
@@ -98,22 +122,33 @@ def scan_cmd(
         meta["status"] = status
         save_meta(meta, meta_path)
 
+        # Mark as scanned in cache
+        mark_file_scanned(file_hash, str(filepath), file_size)
+
         rows.append(
             {
                 "path": str(filepath),
                 "type": suffix,
                 "text_path": str(text_path) if status == "OK" else "",
-                "hash": meta["sha256"],
+                "hash": file_hash,
                 "status": status,
             }
         )
+        stats["processed"] += 1
+        stats["new"] += 1
+
         rel_path = str(filepath.relative_to(root)).encode("ascii", "replace").decode("ascii")
-        typer.echo(f"  [{status}] {rel_path}")
+        typer.echo(f"  [{idx}/{len(files)}] [{status}] {rel_path}")
 
     report_path = artifacts / "report.csv"
     write_report(rows, report_path)
-    typer.echo(f"\nDone. {len(rows)} files processed.")
-    typer.echo(f"Report:    {report_path}")
+
+    typer.echo(f"\n{'=' * 40}")
+    typer.echo(f"Done!")
+    typer.echo(f"  Neu verarbeitet: {stats['new']}")
+    typer.echo(f"  Uebersprungen:   {stats['skipped']} (bereits gescannt)")
+    typer.echo(f"  Gesamt geprueft: {len(files)}")
+    typer.echo(f"\nReport:    {report_path}")
     typer.echo(f"Artifacts: {artifacts}")
 
 
@@ -401,7 +436,7 @@ def analyze_cmd(
     # Write analyzed report
     analyzed_path = artifacts / "report_analyzed.csv"
     fieldnames = [
-        "path", "type", "text_path", "hash", "status",
+        "path", "type", "text_path", "hash", "status", "source_root",
         "tags", "doc_type", "folder_prior", "suggested_destination",
         "confidence", "reason", "analysis_status",
         "duplicate_group", "versioned_name",
@@ -434,7 +469,7 @@ def serve_cmd(
     from archiver.web.app import create_app
 
     cfg = _load_config(config)
-    flask_app = create_app(cfg)
+    flask_app = create_app(cfg, config_path=config.resolve())
     typer.echo(f"Starting review interface at http://localhost:{port}")
     flask_app.run(host="0.0.0.0", port=port, debug=True)
 

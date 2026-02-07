@@ -209,22 +209,26 @@ def compute_sorting(
     }
 
 
-# All available categories for LLM
-ALL_CATEGORIES = [
-    "01 Grundwissen LLM",
-    "02 Analyse Unternehmensstruktur und Prozesse",
-    "03 KI Konzepte und Geschaeftsfeldentwicklung",
-    "04 Prompt Engineering",
-    "05 KI Tools und Plattformen",
-    "06 Datenschutz und Compliance",
-    "07 Implementierung und Rollout",
-    "08 KPIs und Erfolgsmessung",
-    "Prompts-Sammlung",
-    "Tools-und-Workflows",
-    "Rechtliches",
-    "Sonstiges",
-    "Schrottplatz/Systemdateien",
-]
+# All available categories for LLM with descriptions
+CATEGORY_DESCRIPTIONS = {
+    "01 Grundwissen LLM": "Funktionsweise von Sprachmodellen, Transformer-Architektur, Token, Training, Halluzinationen, Grundlagen KI",
+    "02 Analyse Unternehmensstruktur und Prozesse": "Ist-Analyse, Prozessaufnahme, Stakeholder-Analyse, Potenzialanalyse fuer KI, Unternehmensanalyse",
+    "03 KI Konzepte und Geschaeftsfeldentwicklung": "Use-Cases entwickeln, Business Cases, ROI-Berechnung, Geschaeftsmodelle mit KI, KI-Strategie",
+    "04 Prompt Engineering": "Prompts schreiben, Techniken (Chain-of-Thought, Few-Shot, Zero-Shot), Prompt-Optimierung, Prompt-Design",
+    "05 KI Tools und Plattformen": "ChatGPT, Claude, Copilot, Midjourney, DALL-E, Tool-Vergleiche, API-Nutzung, Plattform-Tutorials",
+    "06 Datenschutz und Compliance": "DSGVO, EU-AI-Act, Risikoklassen, Datenschutz-Folgenabschaetzung, KI-Regulierung - KEINE Rechnungen!",
+    "07 Implementierung und Rollout": "Change Management, Schulungen, Pilotprojekte, Einfuehrungsstrategien, Mitarbeiter-Training",
+    "08 KPIs und Erfolgsmessung": "Metriken, Monitoring, Evaluation, Qualitaetssicherung, Performance-Messung",
+    "Prompts-Sammlung": "Fertige Prompt-Vorlagen, Prompt-Bibliotheken, Copy-Paste Prompts",
+    "Tools-und-Workflows": "n8n, Automatisierung, Agenten, technische Workflows, Make, Zapier, Integrationen",
+    "Rechtliches": "Gesetze, Verordnungen, juristische Texte zu KI, Rechtsgrundlagen - KEINE Rechnungen/Bestellungen!",
+    "Sonstiges": "Alles ohne klaren KI-Bezug, unklare Zuordnung",
+    "Schrottplatz/Systemdateien": "README, LICENSE, Config-Dateien, technische Metadaten, Changelog",
+    "Schrottplatz/Dozenten-Orga": "VIONA, ProFiles, Vitero, interne IBB-Dokumente, Klassenlisten, Teilnehmerlisten",
+    "Schrottplatz/Privat": "Rechnungen, Bestellungen, Lieferscheine, persoenliche Dokumente, Kontoauszuege, Quittungen",
+}
+
+ALL_CATEGORIES = list(CATEGORY_DESCRIPTIONS.keys())
 
 
 def llm_suggest_destination(
@@ -263,24 +267,33 @@ def llm_suggest_destination(
     model = llm_config.get("llm_sorting_model", "gemma3:4b")
     ollama_url = "http://localhost:11434/api/generate"
 
-    # Build prompt
-    categories_list = "\n".join(f"- {cat}" for cat in ALL_CATEGORIES)
+    # Build prompt with detailed category descriptions
+    categories_with_desc = "\n".join(
+        f"- {cat}: {desc}" for cat, desc in CATEGORY_DESCRIPTIONS.items()
+    )
     text_excerpt = text[:1500]
 
-    prompt = f"""Du bist ein Datei-Klassifizierer. Analysiere die folgende Datei und waehle die passendste Kategorie.
+    prompt = f"""Du bist ein praeziser Datei-Klassifizierer fuer ein KI-Schulungsarchiv.
+
+WICHTIGE REGELN:
+1. Ordne NUR zu, wenn der Inhalt THEMATISCH zur Kategorie passt
+2. Rechnungen, Bestellungen, Lieferscheine gehoeren zu "Schrottplatz/Privat" - NIEMALS zu "Rechtliches"!
+3. "Rechtliches" ist NUR fuer Gesetze, Verordnungen, juristische KI-Texte
+4. "06 Datenschutz und Compliance" ist fuer DSGVO/EU-AI-Act Lernmaterial - KEINE Geschaeftsdokumente
+5. Bei Unsicherheit waehle "Sonstiges" mit niedriger Confidence
 
 DATEINAME: {filename}
 
 INHALT (Auszug):
 {text_excerpt}
 
-VERFUEGBARE KATEGORIEN:
-{categories_list}
+KATEGORIEN MIT BESCHREIBUNG:
+{categories_with_desc}
 
-Antworte NUR im folgenden Format (keine andere Ausgabe):
-KATEGORIE: <exakter Kategoriename>
+Antworte EXAKT in diesem Format (keine andere Ausgabe):
+KATEGORIE: <exakter Kategoriename aus der Liste>
 CONFIDENCE: <0.0-1.0>
-GRUND: <kurze Begruendung>"""
+GRUND: <kurze Begruendung auf Deutsch>"""
 
     try:
         response = requests.post(

@@ -2,9 +2,12 @@
 
 import csv
 import shutil
+import yaml
 from pathlib import Path
 
 from flask import Flask, render_template, request, jsonify, send_file, flash, redirect, url_for
+
+from archiver.web.scan_manager import scan_manager
 
 from archiver.web.database import (
     get_decision,
@@ -404,3 +407,251 @@ def register_routes(app: Flask) -> None:
         """Clear chat history for a file."""
         clear_chat_history(file_hash)
         return jsonify({"success": True})
+
+    @app.route("/export")
+    def export_page():
+        """Export page with copy options."""
+        csv_data = app.config.get("CSV_DATA", [])
+        decisions = {d["file_hash"]: d for d in get_all_decisions()}
+
+        # Calculate stats
+        total = len(csv_data)
+        ok_count = 0
+        review_count = 0
+        scrapyard_count = 0
+
+        for row in csv_data:
+            file_hash = row.get("hash", "")
+            decision = decisions.get(file_hash, {})
+            dest = decision.get("final_destination") or row.get("suggested_destination", "")
+
+            if dest.startswith("Schrottplatz"):
+                scrapyard_count += 1
+            elif row.get("analysis_status") == "REVIEW" and decision.get("status") != "APPROVED":
+                review_count += 1
+            else:
+                ok_count += 1
+
+        return render_template(
+            "export.html",
+            stats={
+                "total": total,
+                "ok": ok_count,
+                "review": review_count,
+                "scrapyard": scrapyard_count,
+            },
+        )
+
+    @app.route("/api/export/copy", methods=["POST"])
+    def api_export_copy():
+        """Copy files to target directory."""
+        from datetime import datetime
+
+        data = request.get_json() or {}
+        target = data.get("target", "").strip()
+        dry_run = data.get("dry_run", True)
+        exclude_scrapyard = data.get("exclude_scrapyard", True)
+        only_approved = data.get("only_approved", False)
+        include_transcripts = data.get("include_transcripts", False)
+
+        if not target:
+            return jsonify({"error": "Zielverzeichnis fehlt"}), 400
+
+        target_path = Path(target)
+
+        csv_data = app.config.get("CSV_DATA", [])
+        decisions = {d["file_hash"]: d for d in get_all_decisions()}
+
+        stats = {"success": 0, "skipped": 0, "errors": 0}
+        destinations: dict[str, int] = {}
+        log_entries = [
+            f"Export Log - {datetime.now().isoformat()}",
+            f"Target: {target}",
+            f"Dry-run: {dry_run}",
+            "=" * 50,
+        ]
+
+        for row in csv_data:
+            file_hash = row.get("hash", "")
+            original_path = Path(row.get("path", ""))
+            text_path_str = row.get("text_path", "")
+
+            decision = decisions.get(file_hash, {})
+            dest = decision.get("final_destination") or row.get("suggested_destination", "Sonstiges")
+            status = decision.get("status", row.get("analysis_status", "OK"))
+
+            # Filter: Schrottplatz
+            if exclude_scrapyard and dest.startswith("Schrottplatz"):
+                stats["skipped"] += 1
+                continue
+
+            # Filter: Only approved
+            if only_approved and status not in ("APPROVED", "OK"):
+                stats["skipped"] += 1
+                continue
+
+            # Check source exists
+            if not original_path.exists():
+                stats["skipped"] += 1
+                log_entries.append(f"[SKIP] {original_path} - nicht gefunden")
+                continue
+
+            # Build target path
+            filename = row.get("versioned_name") or original_path.name
+            target_folder = target_path / dest
+            target_file = target_folder / filename
+
+            # Track destinations
+            destinations[dest] = destinations.get(dest, 0) + 1
+
+            if dry_run:
+                stats["success"] += 1
+                log_entries.append(f"[DRY-RUN] {original_path} -> {target_file}")
+            else:
+                try:
+                    target_folder.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(original_path, target_file)
+                    log_entries.append(f"[COPIED] {original_path} -> {target_file}")
+
+                    # Copy transcript if requested
+                    if include_transcripts and text_path_str and Path(text_path_str).exists():
+                        transcript_target = target_folder / (Path(filename).stem + ".txt")
+                        shutil.copy2(text_path_str, transcript_target)
+                        log_entries.append(f"[TRANSCRIPT] -> {transcript_target}")
+
+                    stats["success"] += 1
+                except Exception as e:
+                    stats["errors"] += 1
+                    log_entries.append(f"[ERROR] {original_path} - {e}")
+
+        # Write log file
+        log_path = None
+        if not dry_run and stats["success"] > 0:
+            try:
+                target_path.mkdir(parents=True, exist_ok=True)
+                log_path = target_path / "copy_log.txt"
+                log_entries.append("=" * 50)
+                log_entries.append(f"Erfolg: {stats['success']}, Fehler: {stats['errors']}")
+                log_path.write_text("\n".join(log_entries), encoding="utf-8")
+            except Exception:
+                pass
+
+        return jsonify({
+            "success": stats["success"],
+            "skipped": stats["skipped"],
+            "errors": stats["errors"],
+            "destinations": destinations,
+            "dry_run": dry_run,
+            "log_path": str(log_path) if log_path else None,
+        })
+
+    # ========== SCAN ROUTES ==========
+
+    @app.route("/scan")
+    def scan_page():
+        """Scan page with folder management and options."""
+        config_path = app.config.get("CONFIG_PATH", Path("config.yaml"))
+        scan_roots = []
+
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = yaml.safe_load(f) or {}
+                    scan_roots = config.get("scan_roots") or []
+                    # Filter out commented entries (None values from YAML)
+                    scan_roots = [r for r in scan_roots if r]
+            except Exception:
+                pass
+
+        return render_template("scan.html", scan_roots=scan_roots)
+
+    @app.route("/api/scan/folders", methods=["POST"])
+    def manage_folders():
+        """Add or remove scan folders from config."""
+        data = request.get_json() or {}
+        action = data.get("action")
+        folder = data.get("folder", "").strip()
+
+        config_path = app.config.get("CONFIG_PATH", Path("config.yaml"))
+
+        # Load current config
+        config = {}
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = yaml.safe_load(f) or {}
+            except Exception:
+                pass
+
+        scan_roots = config.get("scan_roots") or []
+        # Filter out None values
+        scan_roots = [r for r in scan_roots if r]
+
+        if action == "add":
+            if not folder:
+                return jsonify({"error": "Ordner fehlt"}), 400
+            # Validate folder exists
+            if not Path(folder).exists():
+                return jsonify({"error": f"Ordner existiert nicht: {folder}"}), 400
+            if folder not in scan_roots:
+                scan_roots.append(folder)
+
+        elif action == "remove":
+            if folder in scan_roots:
+                scan_roots.remove(folder)
+
+        else:
+            return jsonify({"error": "Unbekannte Aktion"}), 400
+
+        # Save config
+        config["scan_roots"] = scan_roots
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+        except Exception as e:
+            return jsonify({"error": f"Fehler beim Speichern: {e}"}), 500
+
+        return jsonify({"success": True, "folders": scan_roots})
+
+    @app.route("/api/scan/start", methods=["POST"])
+    def start_scan():
+        """Start a background scan job."""
+        data = request.get_json() or {}
+        folders = data.get("folders", [])
+        options = {
+            "incremental": data.get("incremental", True),
+            "force": data.get("force", False),
+            "use_llm": data.get("use_llm", False),
+            "analyze": data.get("analyze", True),
+            "limit": data.get("limit"),
+        }
+
+        if not folders:
+            return jsonify({"error": "Keine Ordner angegeben"}), 400
+
+        # Create and start job
+        job = scan_manager.create_job(folders, options)
+        archiver_path = app.config.get("ARCHIVER_ROOT", Path.cwd())
+        job.start(archiver_path)
+
+        return jsonify({"success": True, "job_id": job.job_id})
+
+    @app.route("/api/scan/status/<job_id>")
+    def scan_status(job_id: str):
+        """Get status of a scan job."""
+        job = scan_manager.get_job(job_id)
+        if not job:
+            return jsonify({"error": "Job nicht gefunden"}), 404
+        return jsonify(job.to_dict())
+
+    @app.route("/api/scan/stop", methods=["POST"])
+    def stop_scan():
+        """Stop a running scan job."""
+        data = request.get_json() or {}
+        job_id = data.get("job_id")
+
+        if not job_id:
+            return jsonify({"error": "Job-ID fehlt"}), 400
+
+        success = scan_manager.stop_job(job_id)
+        return jsonify({"success": success})

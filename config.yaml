@@ -1,41 +1,27 @@
-root_dir: ./meine_dateien
-
-ignore_patterns:
-  - node_modules
-  - .git
-  - __pycache__
-  - .cache
-
-supported_extensions:
-  # Documents
-  - .md
-  - .txt
-  - .pdf
-  - .docx
-  # Audio
-  - .mp3
-  - .m4a
-  - .wav
-  - .ogg
-  # Video
-  - .mp4
-  - .mkv
-  - .avi
-  - .mov
-  - .webm
-
 artifacts_dir: ./artifacts
-
-# Whisper transcription settings
-whisper_enabled: true
-whisper_model: base  # Options: tiny, base, small, medium, large
-
-# LLM-based sorting (requires Ollama)
+ignore_patterns:
+- node_modules
+- .git
+- __pycache__
+- .cache
 llm_sorting: false
-llm_sorting_model: gemma3:4b  # Smaller, faster model for sorting
-
-# Batch scan roots (for scan-batch --use-config)
+llm_sorting_model: gemma3:4b
+root_dir: ./meine_dateien
 scan_roots:
-  # - C:\Users\CKBaumgarten\Documents
-  # - C:\Users\CKBaumgarten\Downloads
-  # - C:\Users\CKBaumgarten\Desktop
+- C:/Users/CKBaumgarten/Documents
+supported_extensions:
+- .md
+- .txt
+- .pdf
+- .docx
+- .mp3
+- .m4a
+- .wav
+- .ogg
+- .mp4
+- .mkv
+- .avi
+- .mov
+- .webm
+whisper_enabled: true
+whisper_model: base

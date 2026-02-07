@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}Export - File Archiver{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="/" class="text-blue-600 hover:underline">&larr; Zuruck zum Dashboard</a>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <!-- Export Form -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h1 class="text-xl font-bold text-gray-800 mb-6">Dateien exportieren</h1>
+
+        <form id="export-form" class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">
+                    Zielverzeichnis *
+                </label>
+                <input type="text" id="target-dir" required
+                       class="w-full border rounded px-3 py-2"
+                       placeholder="z.B. Z:\Archiv oder \\Server\Share">
+            </div>
+
+            <div class="space-y-2">
+                <label class="flex items-center gap-2">
+                    <input type="checkbox" id="exclude-scrapyard" checked class="rounded">
+                    <span class="text-sm">Schrottplatz ausschliessen</span>
+                </label>
+                <label class="flex items-center gap-2">
+                    <input type="checkbox" id="only-approved" class="rounded">
+                    <span class="text-sm">Nur APPROVED/OK (REVIEW uberspringen)</span>
+                </label>
+                <label class="flex items-center gap-2">
+                    <input type="checkbox" id="include-transcripts" class="rounded">
+                    <span class="text-sm">Transkripte mitkopieren</span>
+                </label>
+            </div>
+
+            <div class="flex gap-3 pt-4">
+                <button type="button" onclick="runPreview()" class="btn btn-secondary flex-1">
+                    Vorschau (Dry-Run)
+                </button>
+                <button type="button" onclick="runCopy()" class="btn btn-primary flex-1">
+                    Kopieren starten
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Preview / Results -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h2 class="text-lg font-semibold text-gray-800 mb-4">Ergebnis</h2>
+
+        <div id="result-container">
+            <div class="text-gray-500 text-sm">
+                Klicken Sie "Vorschau" um zu sehen, was kopiert wird.
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Stats Overview -->
+<div class="mt-6 bg-white rounded-lg shadow p-6">
+    <h2 class="text-lg font-semibold text-gray-800 mb-4">Aktuelle Statistik</h2>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div class="text-center">
+            <div class="text-2xl font-bold text-gray-800">{{ stats.total }}</div>
+            <div class="text-sm text-gray-500">Gesamt</div>
+        </div>
+        <div class="text-center">
+            <div class="text-2xl font-bold text-green-600">{{ stats.ok }}</div>
+            <div class="text-sm text-gray-500">OK</div>
+        </div>
+        <div class="text-center">
+            <div class="text-2xl font-bold text-orange-600">{{ stats.review }}</div>
+            <div class="text-sm text-gray-500">REVIEW</div>
+        </div>
+        <div class="text-center">
+            <div class="text-2xl font-bold text-red-600">{{ stats.scrapyard }}</div>
+            <div class="text-sm text-gray-500">Schrottplatz</div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function runPreview() {
+    await runExport(true);
+}
+
+async function runCopy() {
+    if (!confirm('Dateien wirklich kopieren?')) return;
+    await runExport(false);
+}
+
+async function runExport(dryRun) {
+    const target = document.getElementById('target-dir').value.trim();
+    if (!target) {
+        alert('Bitte Zielverzeichnis angeben');
+        return;
+    }
+
+    const container = document.getElementById('result-container');
+    container.innerHTML = '<div class="text-blue-600">Verarbeite...</div>';
+
+    try {
+        const response = await fetch('/api/export/copy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target: target,
+                dry_run: dryRun,
+                exclude_scrapyard: document.getElementById('exclude-scrapyard').checked,
+                only_approved: document.getElementById('only-approved').checked,
+                include_transcripts: document.getElementById('include-transcripts').checked,
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.error) {
+            container.innerHTML = `<div class="text-red-600">Fehler: ${data.error}</div>`;
+            return;
+        }
+
+        // Build result HTML
+        let html = `
+            <div class="space-y-4">
+                <div class="grid grid-cols-3 gap-4 text-center">
+                    <div>
+                        <div class="text-2xl font-bold text-green-600">${data.success}</div>
+                        <div class="text-sm text-gray-500">${dryRun ? 'Zu kopieren' : 'Kopiert'}</div>
+                    </div>
+                    <div>
+                        <div class="text-2xl font-bold text-gray-600">${data.skipped}</div>
+                        <div class="text-sm text-gray-500">Ubersprungen</div>
+                    </div>
+                    <div>
+                        <div class="text-2xl font-bold text-red-600">${data.errors}</div>
+                        <div class="text-sm text-gray-500">Fehler</div>
+                    </div>
+                </div>
+        `;
+
+        if (data.destinations && Object.keys(data.destinations).length > 0) {
+            html += '<div class="border-t pt-4 mt-4"><h3 class="font-medium mb-2">Zielordner:</h3><ul class="text-sm space-y-1">';
+            for (const [dest, count] of Object.entries(data.destinations)) {
+                html += `<li class="flex justify-between"><span>${dest}</span><span class="text-gray-500">${count} Dateien</span></li>`;
+            }
+            html += '</ul></div>';
+        }
+
+        if (dryRun) {
+            html += '<div class="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800">[Vorschau] Keine Dateien wurden kopiert.</div>';
+        } else if (data.log_path) {
+            html += `<div class="mt-4 p-3 bg-green-50 border border-green-200 rounded text-sm text-green-800">Log gespeichert: ${data.log_path}</div>`;
+        }
+
+        html += '</div>';
+        container.innerHTML = html;
+
+    } catch (e) {
+        container.innerHTML = `<div class="text-red-600">Fehler: ${e.message}</div>`;
+    }
+}
+</script>
+{% endblock %}

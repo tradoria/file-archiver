@@ -1,0 +1,411 @@
+{% extends "base.html" %}
+
+{% block title %}Scan - File Archiver{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="/" class="text-blue-600 hover:underline">&larr; Zuruck zum Dashboard</a>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Folder Management -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h2 class="text-lg font-semibold text-gray-800 mb-4">Ordner-Verwaltung</h2>
+
+        <div id="folder-list" class="space-y-2 mb-4">
+            {% for folder in scan_roots %}
+            <div class="flex items-center gap-2 p-2 bg-gray-50 rounded" data-folder="{{ folder }}">
+                <span class="flex-1 text-sm font-mono truncate" title="{{ folder }}">{{ folder }}</span>
+                <button onclick="removeFolder('{{ folder }}')" class="text-red-500 hover:text-red-700 px-2">
+                    &times;
+                </button>
+            </div>
+            {% else %}
+            <div class="text-gray-500 text-sm" id="no-folders-msg">
+                Keine Ordner konfiguriert
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="flex gap-2">
+            <input type="text" id="new-folder"
+                   class="flex-1 border rounded px-3 py-2 text-sm"
+                   placeholder="C:\Users\... oder \\Server\Share">
+            <button onclick="addFolder()" class="btn btn-primary text-sm">
+                Hinzufugen
+            </button>
+        </div>
+    </div>
+
+    <!-- Scan Options -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h2 class="text-lg font-semibold text-gray-800 mb-4">Scan-Optionen</h2>
+
+        <div class="space-y-3 mb-6">
+            <label class="flex items-center gap-2">
+                <input type="checkbox" id="opt-incremental" checked class="rounded">
+                <span class="text-sm">Incremental (nur neue Dateien)</span>
+            </label>
+            <label class="flex items-center gap-2">
+                <input type="checkbox" id="opt-force" class="rounded">
+                <span class="text-sm">Force (alles neu scannen)</span>
+            </label>
+            <label class="flex items-center gap-2">
+                <input type="checkbox" id="opt-use-llm" class="rounded">
+                <span class="text-sm">LLM-Sortierung verwenden</span>
+            </label>
+            <label class="flex items-center gap-2">
+                <input type="checkbox" id="opt-analyze" checked class="rounded">
+                <span class="text-sm">Nach Scan analysieren</span>
+            </label>
+
+            <div class="pt-2">
+                <label class="block text-sm text-gray-600 mb-1">Limit (leer = alle)</label>
+                <input type="number" id="opt-limit" min="1"
+                       class="w-full border rounded px-3 py-2 text-sm"
+                       placeholder="z.B. 100">
+            </div>
+        </div>
+
+        <div class="space-y-2">
+            <button onclick="startScan()" id="btn-scan" class="btn btn-primary w-full">
+                Scan starten
+            </button>
+            <button onclick="stopScan()" id="btn-stop" class="btn btn-danger w-full hidden">
+                Scan abbrechen
+            </button>
+        </div>
+    </div>
+
+    <!-- Progress & Status -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h2 class="text-lg font-semibold text-gray-800 mb-4">Status</h2>
+
+        <div id="status-idle" class="text-gray-500 text-sm">
+            Bereit zum Scannen
+        </div>
+
+        <div id="status-running" class="hidden">
+            <div class="flex items-center gap-2 mb-4">
+                <div class="animate-spin rounded-full h-5 w-5 border-2 border-blue-600 border-t-transparent"></div>
+                <span class="text-blue-600 font-medium" id="status-phase">Scanne...</span>
+            </div>
+
+            <div class="space-y-2 text-sm">
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Aktueller Ordner:</span>
+                    <span id="current-folder" class="font-mono truncate max-w-[150px]">-</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Verarbeitet:</span>
+                    <span id="files-processed" class="font-medium">0</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Uebersprungen:</span>
+                    <span id="files-skipped" class="font-medium">0</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-600">Fehler:</span>
+                    <span id="files-errors" class="font-medium text-red-600">0</span>
+                </div>
+            </div>
+
+            <!-- Progress bar -->
+            <div class="mt-4">
+                <div class="w-full bg-gray-200 rounded-full h-2">
+                    <div id="progress-bar" class="bg-blue-600 h-2 rounded-full transition-all" style="width: 0%"></div>
+                </div>
+                <div class="text-right text-xs text-gray-500 mt-1">
+                    <span id="progress-percent">0</span>%
+                </div>
+            </div>
+
+            <!-- Current file -->
+            <div class="mt-4 text-xs text-gray-500">
+                <div class="truncate" id="current-file">-</div>
+            </div>
+        </div>
+
+        <div id="status-done" class="hidden">
+            <div class="flex items-center gap-2 mb-4">
+                <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                </svg>
+                <span class="text-green-600 font-medium">Abgeschlossen</span>
+            </div>
+
+            <div class="grid grid-cols-3 gap-4 text-center mb-4">
+                <div>
+                    <div class="text-2xl font-bold text-green-600" id="result-processed">0</div>
+                    <div class="text-xs text-gray-500">Verarbeitet</div>
+                </div>
+                <div>
+                    <div class="text-2xl font-bold text-gray-600" id="result-skipped">0</div>
+                    <div class="text-xs text-gray-500">Uebersprungen</div>
+                </div>
+                <div>
+                    <div class="text-2xl font-bold text-red-600" id="result-errors">0</div>
+                    <div class="text-xs text-gray-500">Fehler</div>
+                </div>
+            </div>
+
+            <div class="space-y-2">
+                <a href="/" class="btn btn-primary w-full block text-center">
+                    Zum Dashboard
+                </a>
+                <button onclick="resetStatus()" class="btn btn-secondary w-full">
+                    Neuer Scan
+                </button>
+            </div>
+        </div>
+
+        <div id="status-error" class="hidden">
+            <div class="flex items-center gap-2 mb-4">
+                <svg class="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                </svg>
+                <span class="text-red-600 font-medium">Fehler</span>
+            </div>
+            <div id="error-message" class="text-sm text-red-600 mb-4"></div>
+            <button onclick="resetStatus()" class="btn btn-secondary w-full">
+                Zuruecksetzen
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Log Output -->
+<div class="mt-6 bg-white rounded-lg shadow p-6">
+    <div class="flex justify-between items-center mb-4">
+        <h2 class="text-lg font-semibold text-gray-800">Log-Ausgabe</h2>
+        <button onclick="clearLog()" class="text-sm text-gray-500 hover:text-gray-700">
+            Leeren
+        </button>
+    </div>
+    <div id="log-container" class="bg-gray-900 text-gray-100 font-mono text-xs p-4 rounded h-64 overflow-y-auto">
+        <div class="text-gray-500">Warte auf Scan...</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let scanJobId = null;
+let pollInterval = null;
+
+async function addFolder() {
+    const input = document.getElementById('new-folder');
+    const folder = input.value.trim();
+    if (!folder) return;
+
+    try {
+        const response = await fetch('/api/scan/folders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'add', folder })
+        });
+        const data = await response.json();
+        if (data.success) {
+            input.value = '';
+            refreshFolderList(data.folders);
+        } else {
+            alert('Fehler: ' + data.error);
+        }
+    } catch (e) {
+        alert('Fehler: ' + e.message);
+    }
+}
+
+async function removeFolder(folder) {
+    try {
+        const response = await fetch('/api/scan/folders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'remove', folder })
+        });
+        const data = await response.json();
+        if (data.success) {
+            refreshFolderList(data.folders);
+        }
+    } catch (e) {
+        alert('Fehler: ' + e.message);
+    }
+}
+
+function refreshFolderList(folders) {
+    const container = document.getElementById('folder-list');
+    if (folders.length === 0) {
+        container.innerHTML = '<div class="text-gray-500 text-sm" id="no-folders-msg">Keine Ordner konfiguriert</div>';
+    } else {
+        container.innerHTML = folders.map(f => `
+            <div class="flex items-center gap-2 p-2 bg-gray-50 rounded" data-folder="${f}">
+                <span class="flex-1 text-sm font-mono truncate" title="${f}">${f}</span>
+                <button onclick="removeFolder('${f}')" class="text-red-500 hover:text-red-700 px-2">&times;</button>
+            </div>
+        `).join('');
+    }
+}
+
+async function startScan() {
+    const folders = [...document.querySelectorAll('#folder-list [data-folder]')].map(el => el.dataset.folder);
+    if (folders.length === 0) {
+        alert('Bitte mindestens einen Ordner hinzufuegen');
+        return;
+    }
+
+    const options = {
+        folders,
+        incremental: document.getElementById('opt-incremental').checked,
+        force: document.getElementById('opt-force').checked,
+        use_llm: document.getElementById('opt-use-llm').checked,
+        analyze: document.getElementById('opt-analyze').checked,
+        limit: document.getElementById('opt-limit').value || null,
+    };
+
+    try {
+        document.getElementById('btn-scan').classList.add('hidden');
+        document.getElementById('btn-stop').classList.remove('hidden');
+
+        setStatus('running');
+        clearLog();
+        addLog('Starte Scan...');
+
+        const response = await fetch('/api/scan/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(options)
+        });
+        const data = await response.json();
+
+        if (data.error) {
+            setStatus('error', data.error);
+            return;
+        }
+
+        scanJobId = data.job_id;
+        addLog('Job gestartet: ' + scanJobId);
+        startPolling();
+
+    } catch (e) {
+        setStatus('error', e.message);
+    }
+}
+
+async function stopScan() {
+    if (!scanJobId) return;
+
+    try {
+        await fetch('/api/scan/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_id: scanJobId })
+        });
+        addLog('Scan abgebrochen');
+        stopPolling();
+        setStatus('error', 'Scan wurde abgebrochen');
+    } catch (e) {
+        addLog('Fehler beim Abbrechen: ' + e.message);
+    }
+}
+
+function startPolling() {
+    pollInterval = setInterval(pollStatus, 1000);
+}
+
+function stopPolling() {
+    if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+    }
+    document.getElementById('btn-scan').classList.remove('hidden');
+    document.getElementById('btn-stop').classList.add('hidden');
+}
+
+async function pollStatus() {
+    if (!scanJobId) return;
+
+    try {
+        const response = await fetch(`/api/scan/status/${scanJobId}`);
+        const data = await response.json();
+
+        // Update progress
+        document.getElementById('files-processed').textContent = data.processed || 0;
+        document.getElementById('files-skipped').textContent = data.skipped || 0;
+        document.getElementById('files-errors').textContent = data.errors || 0;
+        document.getElementById('current-folder').textContent = data.current_folder || '-';
+        document.getElementById('current-file').textContent = data.current_file || '-';
+        document.getElementById('status-phase').textContent = data.phase || 'Scanne...';
+
+        if (data.total > 0) {
+            const percent = Math.round((data.processed + data.skipped) / data.total * 100);
+            document.getElementById('progress-bar').style.width = percent + '%';
+            document.getElementById('progress-percent').textContent = percent;
+        }
+
+        // Add new log lines
+        if (data.new_logs && data.new_logs.length > 0) {
+            data.new_logs.forEach(line => addLog(line));
+        }
+
+        // Check if done
+        if (data.status === 'done') {
+            stopPolling();
+            document.getElementById('result-processed').textContent = data.processed || 0;
+            document.getElementById('result-skipped').textContent = data.skipped || 0;
+            document.getElementById('result-errors').textContent = data.errors || 0;
+            setStatus('done');
+            addLog('='.repeat(40));
+            addLog('Scan abgeschlossen!');
+        } else if (data.status === 'error') {
+            stopPolling();
+            setStatus('error', data.error_message || 'Unbekannter Fehler');
+        }
+
+    } catch (e) {
+        // Ignore polling errors
+    }
+}
+
+function setStatus(status, errorMessage = '') {
+    document.getElementById('status-idle').classList.add('hidden');
+    document.getElementById('status-running').classList.add('hidden');
+    document.getElementById('status-done').classList.add('hidden');
+    document.getElementById('status-error').classList.add('hidden');
+
+    if (status === 'idle') {
+        document.getElementById('status-idle').classList.remove('hidden');
+    } else if (status === 'running') {
+        document.getElementById('status-running').classList.remove('hidden');
+    } else if (status === 'done') {
+        document.getElementById('status-done').classList.remove('hidden');
+    } else if (status === 'error') {
+        document.getElementById('status-error').classList.remove('hidden');
+        document.getElementById('error-message').textContent = errorMessage;
+    }
+}
+
+function resetStatus() {
+    scanJobId = null;
+    setStatus('idle');
+    document.getElementById('btn-scan').classList.remove('hidden');
+    document.getElementById('btn-stop').classList.add('hidden');
+}
+
+function addLog(text) {
+    const container = document.getElementById('log-container');
+    const line = document.createElement('div');
+    line.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+    container.appendChild(line);
+    container.scrollTop = container.scrollHeight;
+}
+
+function clearLog() {
+    document.getElementById('log-container').innerHTML = '';
+}
+
+// Allow Enter key to add folder
+document.getElementById('new-folder').addEventListener('keypress', e => {
+    if (e.key === 'Enter') addFolder();
+});
+</script>
+{% endblock %}

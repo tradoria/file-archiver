@@ -20,7 +20,7 @@ def load_csv_data(artifacts_dir: Path) -> list[dict]:
         return list(reader)
 
 
-def create_app(config: Optional[dict] = None) -> Flask:
+def create_app(config: Optional[dict] = None, config_path: Optional[Path] = None) -> Flask:
     """Create and configure the Flask application."""
     app = Flask(__name__, template_folder="templates")
     app.secret_key = "file-archiver-secret-key"
@@ -31,6 +31,8 @@ def create_app(config: Optional[dict] = None) -> Flask:
 
     app.config["ARTIFACTS_DIR"] = artifacts_dir
     app.config["CSV_DATA"] = load_csv_data(artifacts_dir)
+    app.config["CONFIG_PATH"] = config_path or Path("config.yaml")
+    app.config["ARCHIVER_ROOT"] = Path.cwd()
 
     # Initialize database
     db_path = artifacts_dir / "archiver.db"
