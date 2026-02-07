@@ -1,8 +1,43 @@
-{% extends "base.html" %}
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scan - File Archiver</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .tag { @apply inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded mr-1 mb-1; }
+        .btn { @apply px-4 py-2 rounded font-medium transition-colors; }
+        .btn-primary { @apply bg-blue-600 text-white hover:bg-blue-700; }
+        .btn-success { @apply bg-green-600 text-white hover:bg-green-700; }
+        .btn-danger { @apply bg-red-600 text-white hover:bg-red-700; }
+        .btn-secondary { @apply bg-gray-200 text-gray-800 hover:bg-gray-300; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <nav class="bg-blue-600 text-white shadow-lg">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <a href="/" class="font-bold text-xl">File Archiver - Review</a>
+            <div class="flex gap-4">
+                <a href="/scan" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-400 transition-colors">
+                    Scan
+                </a>
+                <a href="/export" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-400 transition-colors">
+                    Export
+                </a>
+                <a href="/export/csv" class="bg-white text-blue-600 px-4 py-2 rounded hover:bg-blue-50 transition-colors">
+                    CSV
+                </a>
+            </div>
+        </div>
+    </nav>
 
-{% block title %}Scan - File Archiver{% endblock %}
+    <main class="container mx-auto px-4 py-6">
+        
+            
+        
 
-{% block content %}
+        
 <div class="mb-4">
     <a href="/" class="text-blue-600 hover:underline">&larr; Zuruck zum Dashboard</a>
 </div>
@@ -13,18 +48,14 @@
         <h2 class="text-lg font-semibold text-gray-800 mb-4">Ordner-Verwaltung</h2>
 
         <div id="folder-list" class="space-y-2 mb-4">
-            {% for folder in scan_roots %}
-            <div class="flex items-center gap-2 p-2 bg-gray-50 rounded" data-folder="{{ folder }}">
-                <span class="flex-1 text-sm font-mono truncate" title="{{ folder }}">{{ folder }}</span>
-                <button onclick="removeFolder('{{ folder }}')" class="text-red-500 hover:text-red-700 px-2">
+            
+            <div class="flex items-center gap-2 p-2 bg-gray-50 rounded" data-folder="C:/Users/CKBaumgarten/Documents">
+                <span class="flex-1 text-sm font-mono truncate" title="C:/Users/CKBaumgarten/Documents">C:/Users/CKBaumgarten/Documents</span>
+                <button onclick="removeFolder('C:/Users/CKBaumgarten/Documents')" class="text-red-500 hover:text-red-700 px-2">
                     &times;
                 </button>
             </div>
-            {% else %}
-            <div class="text-gray-500 text-sm" id="no-folders-msg">
-                Keine Ordner konfiguriert
-            </div>
-            {% endfor %}
+            
         </div>
 
         <div class="flex gap-2">
@@ -68,10 +99,10 @@
         </div>
 
         <div class="space-y-2">
-            <button type="button" onclick="startScan()" id="btn-scan" class="btn btn-primary w-full">
+            <button onclick="startScan()" id="btn-scan" class="btn btn-primary w-full">
                 Scan starten
             </button>
-            <button type="button" onclick="stopScan()" id="btn-stop" class="btn btn-danger w-full hidden">
+            <button onclick="stopScan()" id="btn-stop" class="btn btn-danger w-full hidden">
                 Scan abbrechen
             </button>
         </div>
@@ -186,9 +217,52 @@
         <div class="text-gray-500">Warte auf Scan...</div>
     </div>
 </div>
-{% endblock %}
 
-{% block scripts %}
+    </main>
+
+    <script>
+        async function submitDecision(fileHash, action, destination = null) {
+            const body = { action };
+            if (destination) body.destination = destination;
+
+            const response = await fetch(`/api/decision/${fileHash}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+
+            return response.json();
+        }
+
+        async function loadSummary(fileHash) {
+            const container = document.getElementById('summary-container');
+            container.innerHTML = '<div class="text-gray-500">Lade Zusammenfassung...</div>';
+
+            try {
+                const response = await fetch(`/api/summary/${fileHash}`);
+                const data = await response.json();
+                container.innerHTML = `<p class="text-gray-700">${data.summary || data.error}</p>`;
+            } catch (e) {
+                container.innerHTML = `<p class="text-red-600">Fehler beim Laden: ${e.message}</p>`;
+            }
+        }
+
+        async function exportTranscript(fileHash) {
+            try {
+                const response = await fetch(`/export/transcript/${fileHash}`, { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    alert('Transkript exportiert nach: ' + data.path);
+                } else {
+                    alert('Fehler: ' + data.error);
+                }
+            } catch (e) {
+                alert('Fehler: ' + e.message);
+            }
+        }
+    </script>
+
+    
 <script>
 let scanJobId = null;
 let pollInterval = null;
@@ -421,4 +495,6 @@ document.getElementById('new-folder').addEventListener('keypress', e => {
     if (e.key === 'Enter') addFolder();
 });
 </script>
-{% endblock %}
+
+</body>
+</html>
