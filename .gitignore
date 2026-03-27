@@ -32,3 +32,18 @@ nul
 
 # Claude settings
 .claude/
+# API Keys & Secrets (Kritisch!)
+.env
+*.env
+config.json
+secrets.ini
+
+# Large Data Sets (Data Science)
+*.csv
+*.json
+*.xlsx
+*.parquet
+!metadata.json  # Ausnahme, falls eine kleine Info-Datei mit muss
+
+# Logs
+*.log
