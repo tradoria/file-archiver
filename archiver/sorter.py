@@ -1,5 +1,6 @@
 """Sorting logic: suggest destinations based on content analysis."""
 
+import os
 import re
 from pathlib import Path
 
@@ -265,9 +266,9 @@ def llm_suggest_destination(
         pass  # Continue without cache
 
     model = llm_config.get("llm_sorting_model", "gemma3:4b")
-    ollama_url = "http://localhost:11434/api/generate"
+    base_url = llm_config.get("llm_base_url", "")
 
-    # Build prompt with detailed category descriptions
+    # Build prompt
     categories_with_desc = "\n".join(
         f"- {cat}: {desc}" for cat, desc in CATEGORY_DESCRIPTIONS.items()
     )
@@ -294,52 +295,67 @@ Antworte EXAKT in diesem Format (keine andere Ausgabe):
 KATEGORIE: <exakter Kategoriename aus der Liste>
 CONFIDENCE: <0.0-1.0>
 GRUND: <kurze Begruendung auf Deutsch>"""
-
-    try:
-        response = requests.post(
-            ollama_url,
-            json={"model": model, "prompt": prompt, "stream": False},
-            timeout=60,
-        )
-        response.raise_for_status()
-        result = response.json().get("response", "")
-
-        # Parse response
-        destination = "Sonstiges"
-        confidence = 0.5
-        reason = "LLM-Analyse"
-
-        for line in result.strip().split("\n"):
-            line = line.strip()
-            if line.startswith("KATEGORIE:"):
-                dest = line.replace("KATEGORIE:", "").strip()
-                # Validate against known categories
-                for cat in ALL_CATEGORIES:
-                    if cat.lower() == dest.lower() or cat in dest:
-                        destination = cat
-                        break
-            elif line.startswith("CONFIDENCE:"):
-                try:
-                    conf = float(line.replace("CONFIDENCE:", "").strip())
-                    confidence = max(0.0, min(1.0, conf))
-                except ValueError:
-                    pass
-            elif line.startswith("GRUND:"):
-                reason = line.replace("GRUND:", "").strip()
-
-        # Cache result
-        try:
-            cache_llm_sorting(file_hash, destination, confidence, reason, model)
-        except Exception:
-            pass
-
-        return {
-            "destination": destination,
-            "confidence": round(confidence, 2),
-            "reason": reason,
+    
+    # IONOS AI Model Hub (OpenAI-kompatibel)
+    if base_url and "ionos" in base_url:
+        api_key = os.getenv("IONOS_AI_TOKEN", "")
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+            "max_tokens": 200
         }
+        try:
+            response = requests.post(f"{base_url}/chat/completions", headers=headers, json=payload, timeout=120)
+            response.raise_for_status()
+            result = response.json()["choices"][0]["message"]["content"]
+        except Exception:
+            return None
+    else:
+        # Ollama Fallback
+        ollama_url = "http://localhost:11434/api/generate"
+        try:
+            response = requests.post(
+                ollama_url,
+                json={"model": model, "prompt": prompt, "stream": False},
+                timeout=60,
+            )
+            response.raise_for_status()
+            result = response.json().get("response", "")
+        except Exception:
+            return None
 
-    except requests.exceptions.ConnectionError:
-        return None  # Fallback to heuristics
+    # Parse response
+    destination = "Sonstiges"
+    confidence = 0.5
+    reason = "LLM-Analyse"
+
+    for line in result.strip().split("\n"):
+        line = line.strip()
+        if line.startswith("KATEGORIE:"):
+            dest = line.replace("KATEGORIE:", "").strip()
+            for cat in ALL_CATEGORIES:
+                if cat.lower() == dest.lower() or cat in dest:
+                    destination = cat
+                    break
+        elif line.startswith("CONFIDENCE:"):
+            try:
+                conf = float(line.replace("CONFIDENCE:", "").strip())
+                confidence = max(0.0, min(1.0, conf))
+            except ValueError:
+                pass
+        elif line.startswith("GRUND:"):
+            reason = line.replace("GRUND:", "").strip()
+
+    # Cache result
+    try:
+        cache_llm_sorting(file_hash, destination, confidence, reason, model)
     except Exception:
-        return None  # Fallback to heuristics
+        pass
+
+    return {
+        "destination": destination,
+        "confidence": round(confidence, 2),
+        "reason": reason,
+    }

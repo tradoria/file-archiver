@@ -314,6 +314,7 @@ def analyze_cmd(
     llm_enabled = use_llm or cfg.get("llm_sorting", False)
     llm_config = {
         "llm_sorting_model": cfg.get("llm_sorting_model", "gemma3:4b"),
+        "llm_base_url": cfg.get("llm_base_url", ""),
         "artifacts_dir": str(artifacts),
     }
     if llm_enabled:

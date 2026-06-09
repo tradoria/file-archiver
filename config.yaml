@@ -4,11 +4,12 @@ ignore_patterns:
 - .git
 - __pycache__
 - .cache
-llm_sorting: false
-llm_sorting_model: gemma3:4b
-root_dir: ./meine_dateien
+llm_sorting: true
+llm_sorting_model: openai/llama-3.3-70b
+llm_base_url: https://openai.inference.de-txl.ionos.com/v1
+root_dir: /home/cbaumgarten/Dokumente
 scan_roots:
-- C:/Users/CKBaumgarten/Documents
+- /home/cbaumgarten/Dokumente
 supported_extensions:
 - .md
 - .txt
