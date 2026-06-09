@@ -14,8 +14,11 @@ AUDIO_EXT = {".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac"}
 # Video types
 VIDEO_EXT = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".wmv"}
 
+# Image types (OCR)
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".gif", ".webp"}
+
 # All supported extensions
-SUPPORTED_EXT = DOC_EXT | AUDIO_EXT | VIDEO_EXT
+SUPPORTED_EXT = DOC_EXT | AUDIO_EXT | VIDEO_EXT | IMAGE_EXT
 
 
 def scan(

@@ -1,4 +1,4 @@
-"""Text extraction for MD, TXT, PDF, DOCX, Audio, Video."""
+"""Text extraction for MD, TXT, PDF, DOCX, Audio, Video, Images."""
 
 import shutil
 import subprocess
@@ -8,6 +8,7 @@ from pathlib import Path
 # File type sets
 AUDIO_EXT = {".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac"}
 VIDEO_EXT = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".wmv"}
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".gif", ".webp"}
 
 # Global whisper model cache
 _whisper_model = None
@@ -28,6 +29,8 @@ def extract_text(path: Path, whisper_config: dict | None = None) -> str:
         return _read_pdf(path)
     if suffix == ".docx":
         return _read_docx(path)
+    if suffix in IMAGE_EXT:
+        return _read_image(path)
     if suffix in AUDIO_EXT | VIDEO_EXT:
         return _transcribe_media(path, whisper_config or {})
     raise ValueError(f"Unsupported file type: {suffix}")
@@ -38,13 +41,68 @@ def _read_plain(path: Path) -> str:
 
 
 def _read_pdf(path: Path) -> str:
+    """Extract text from PDF. Uses PyMuPDF for text-PDFs, OCRmyPDF for scanned PDFs."""
     import fitz  # PyMuPDF
 
+    # First try: extract text with PyMuPDF
     text_parts: list[str] = []
     with fitz.open(path) as doc:
         for page in doc:
             text_parts.append(page.get_text())
-    return "\n".join(text_parts)
+
+    combined_text = "\n".join(text_parts).strip()
+
+    # If text is substantial (>50 chars), it's likely a text-PDF
+    if len(combined_text) > 50:
+        return combined_text
+
+    # Fallback: OCR with OCRmyPDF / Tesseract
+    return _ocr_pdf(path)
+
+
+def _ocr_pdf(path: Path) -> str:
+    """OCR a scanned PDF using OCRmyPDF or pytesseract fallback."""
+    try:
+        import ocrmypdf
+        import fitz
+
+        # OCRmyPDF: add text layer to temp PDF
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_out:
+            tmp_path = Path(tmp_out.name)
+
+        ocrmypdf.ocr(
+            input_file=path,
+            output_file=tmp_path,
+            language=["deu"],
+            force_ocr=True,
+            progress_bar=False,
+        )
+
+        # Extract text from OCR'd PDF
+        text_parts: list[str] = []
+        with fitz.open(tmp_path) as doc:
+            for page in doc:
+                text_parts.append(page.get_text())
+
+        # Cleanup temp file
+        tmp_path.unlink(missing_ok=True)
+        return "\n".join(text_parts)
+    except Exception:
+        pass
+
+    # Fallback: pdf2image + pytesseract
+    try:
+        from pdf2image import convert_from_path
+        import pytesseract
+
+        images = convert_from_path(path, dpi=200)
+        text_parts = []
+        for img in images:
+            text = pytesseract.image_to_string(img, lang="deu")
+            text_parts.append(text)
+        return "\n".join(text_parts)
+    except Exception as exc:
+        raise RuntimeError(f"OCR failed for {path}: {exc}") from exc
 
 
 def _read_docx(path: Path) -> str:
@@ -52,6 +110,19 @@ def _read_docx(path: Path) -> str:
 
     doc = Document(str(path))
     return "\n".join(p.text for p in doc.paragraphs)
+
+
+def _read_image(path: Path) -> str:
+    """OCR an image using pytesseract with German language."""
+    try:
+        from PIL import Image
+        import pytesseract
+
+        img = Image.open(path)
+        text = pytesseract.image_to_string(img, lang="deu")
+        return text.strip()
+    except Exception as exc:
+        raise RuntimeError(f"OCR failed for image {path}: {exc}") from exc
 
 
 def _check_whisper_available() -> bool:
@@ -103,7 +174,7 @@ def _extract_audio_from_video(video_path: Path, output_path: Path) -> None:
 
 
 def _transcribe_media(path: Path, config: dict) -> str:
-    """Transcribe audio/video file to text using faster-whisper."""
+    """Transcribe audio/video file to text using faster-whisper (German)."""
     if not config.get("whisper_enabled", True):
         raise WhisperNotAvailableError("Whisper disabled in config")
 
@@ -125,9 +196,14 @@ def _transcribe_media(path: Path, config: dict) -> str:
             audio_path = Path(temp_audio.name)
             _extract_audio_from_video(path, audio_path)
 
-        # Transcribe
+        # Transcribe with German language
         model = _get_whisper_model(model_name)
-        segments, info = model.transcribe(str(audio_path), beam_size=5)
+        whisper_language = config.get("whisper_language", "de")
+        segments, info = model.transcribe(
+            str(audio_path),
+            beam_size=5,
+            language=whisper_language,
+        )
 
         # Collect text
         text_parts = []

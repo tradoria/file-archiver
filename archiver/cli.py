@@ -68,6 +68,7 @@ def scan_cmd(
     whisper_config = {
         "whisper_enabled": cfg.get("whisper_enabled", True),
         "whisper_model": cfg.get("whisper_model", "base"),
+        "whisper_language": cfg.get("whisper_language", "de"),
     }
 
     use_cache = incremental and not force
@@ -200,6 +201,7 @@ def scan_batch_cmd(
     whisper_config = {
         "whisper_enabled": cfg.get("whisper_enabled", True),
         "whisper_model": cfg.get("whisper_model", "base"),
+        "whisper_language": cfg.get("whisper_language", "de"),
     }
 
     typer.echo(f"Batch Scan: {len(valid_roots)} directories")

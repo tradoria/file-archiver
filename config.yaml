@@ -24,5 +24,14 @@ supported_extensions:
 - .avi
 - .mov
 - .webm
+- .jpg
+- .jpeg
+- .png
+- .tiff
+- .tif
+- .bmp
+- .gif
+- .webp
 whisper_enabled: true
-whisper_model: base
+whisper_model: medium
+whisper_language: de
