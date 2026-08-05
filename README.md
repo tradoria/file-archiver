@@ -136,7 +136,15 @@ whisper_language: de
 llm_sorting: true
 llm_sorting_model: openai/llama-3.3-70b
 llm_base_url: https://openai.inference.de-txl.ionos.com/v1
+ionos_ai_token: dein-api-key   # alternativ bequem über die Web-UI eintragen, siehe unten
 ```
+
+**API-Key bequem über die Web-UI eintragen:** Statt `ionos_ai_token` manuell in
+`config.yaml` zu schreiben, gibt es unter **Einstellungen** in der Web-Oberfläche
+(`/settings`) ein Eingabefeld dafür. Der Key wird lokal in `config.yaml`
+gespeichert, nie an einen anderen Ort als die eingestellte API-URL übertragen,
+und beim erneuten Öffnen der Seite nicht wieder angezeigt (nur ein Hinweis,
+dass einer hinterlegt ist).
 
 ## OCR (Optical Character Recognition)
 

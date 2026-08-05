@@ -317,6 +317,7 @@ def analyze_cmd(
     llm_config = {
         "llm_sorting_model": cfg.get("llm_sorting_model", "gemma3:4b"),
         "llm_base_url": cfg.get("llm_base_url", ""),
+        "ionos_ai_token": cfg.get("ionos_ai_token", ""),
         "artifacts_dir": str(artifacts),
     }
     if llm_enabled:

@@ -655,3 +655,64 @@ def register_routes(app: Flask) -> None:
 
         success = scan_manager.stop_job(job_id)
         return jsonify({"success": success})
+
+    @app.route("/settings")
+    def settings_page():
+        """Settings page: LLM-Sortierung an/aus, Modell/URL, API-Key."""
+        config_path = app.config.get("CONFIG_PATH", Path("config.yaml"))
+        config = {}
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = yaml.safe_load(f) or {}
+            except Exception:
+                pass
+
+        return render_template(
+            "settings.html",
+            llm_sorting=bool(config.get("llm_sorting", False)),
+            llm_sorting_model=config.get("llm_sorting_model", "openai/llama-3.3-70b"),
+            llm_base_url=config.get("llm_base_url", "https://openai.inference.de-txl.ionos.com/v1"),
+            has_api_key=bool(config.get("ionos_ai_token")),
+        )
+
+    @app.route("/api/settings", methods=["POST"])
+    def save_settings():
+        """Save LLM settings. The API key is only overwritten if a new,
+        non-empty value was submitted, so re-saving other fields never
+        wipes an already-stored key - and the key itself is never sent
+        back to the browser (see settings_page above)."""
+        data = request.get_json() or {}
+        config_path = app.config.get("CONFIG_PATH", Path("config.yaml"))
+
+        config = {}
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = yaml.safe_load(f) or {}
+            except Exception:
+                pass
+
+        config["llm_sorting"] = bool(data.get("llm_sorting"))
+
+        model = (data.get("llm_sorting_model") or "").strip()
+        if model:
+            config["llm_sorting_model"] = model
+
+        base_url = (data.get("llm_base_url") or "").strip()
+        if base_url:
+            config["llm_base_url"] = base_url
+
+        api_key = (data.get("api_key") or "").strip()
+        if api_key:
+            config["ionos_ai_token"] = api_key
+        elif data.get("clear_api_key"):
+            config.pop("ionos_ai_token", None)
+
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+        except Exception as e:
+            return jsonify({"error": f"Fehler beim Speichern: {e}"}), 500
+
+        return jsonify({"success": True, "has_api_key": bool(config.get("ionos_ai_token"))})

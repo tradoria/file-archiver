@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block title %}Einstellungen - File Archiver{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="/" class="text-blue-600 hover:underline">&larr; Zurück zum Dashboard</a>
+</div>
+
+<div class="max-w-2xl bg-white rounded-lg shadow p-6">
+    <h2 class="text-lg font-semibold text-gray-800 mb-1">LLM-Sortierung</h2>
+    <p class="text-sm text-gray-500 mb-6">
+        Optional: lässt Dateien zusätzlich von einem Sprachmodell (IONOS AI Model Hub)
+        einem Zielordner zuordnen. Ohne API-Key bleibt diese Funktion einfach deaktiviert -
+        alles andere in File Archiver funktioniert unabhängig davon.
+    </p>
+
+    <div id="save-message" class="hidden mb-4 p-3 rounded text-sm"></div>
+
+    <form id="settings-form" class="space-y-5">
+        <label class="flex items-center gap-2">
+            <input type="checkbox" id="llm-sorting" class="rounded" {% if llm_sorting %}checked{% endif %}>
+            <span class="text-sm font-medium">LLM-Sortierung aktivieren</span>
+        </label>
+
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1" for="api-key">
+                API-Key (IONOS AI Model Hub)
+            </label>
+            <div class="flex gap-2">
+                <input type="password" id="api-key" autocomplete="off"
+                       class="flex-1 border rounded px-3 py-2 text-sm"
+                       placeholder="{% if has_api_key %}•••••••••••••••• (bereits hinterlegt){% else %}z. B. eyJhbGciOi...{% endif %}">
+                <button type="button" onclick="toggleKeyVisibility()" class="btn btn-secondary text-sm" id="toggle-btn">
+                    Anzeigen
+                </button>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">
+                Wird nur lokal in deiner <code>config.yaml</code> gespeichert, niemals irgendwohin
+                übertragen außer an die eingestellte API-URL beim Sortieren. Leer lassen, um den
+                bereits gespeicherten Key zu behalten.
+                {% if has_api_key %}
+                <button type="button" onclick="clearApiKey()" class="text-red-600 hover:underline ml-1">Gespeicherten Key löschen</button>
+                {% endif %}
+            </p>
+        </div>
+
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1" for="base-url">API-Basis-URL</label>
+            <input type="text" id="base-url" value="{{ llm_base_url }}"
+                   class="w-full border rounded px-3 py-2 text-sm font-mono">
+        </div>
+
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1" for="model">Modell</label>
+            <input type="text" id="model" value="{{ llm_sorting_model }}"
+                   class="w-full border rounded px-3 py-2 text-sm font-mono">
+        </div>
+
+        <button type="submit" class="btn btn-primary text-sm">Speichern</button>
+    </form>
+</div>
+
+{% block scripts %}
+<script>
+function toggleKeyVisibility() {
+    const input = document.getElementById('api-key');
+    const btn = document.getElementById('toggle-btn');
+    if (input.type === 'password') {
+        input.type = 'text';
+        btn.textContent = 'Verbergen';
+    } else {
+        input.type = 'password';
+        btn.textContent = 'Anzeigen';
+    }
+}
+
+function showMessage(text, isError) {
+    const el = document.getElementById('save-message');
+    el.textContent = text;
+    el.className = 'mb-4 p-3 rounded text-sm ' + (isError ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800');
+}
+
+async function saveSettings(extra) {
+    const body = Object.assign({
+        llm_sorting: document.getElementById('llm-sorting').checked,
+        api_key: document.getElementById('api-key').value,
+        llm_base_url: document.getElementById('base-url').value,
+        llm_sorting_model: document.getElementById('model').value,
+    }, extra || {});
+
+    try {
+        const response = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const data = await response.json();
+        if (data.success) {
+            showMessage('Gespeichert.', false);
+            document.getElementById('api-key').value = '';
+            document.getElementById('api-key').placeholder = data.has_api_key
+                ? '•••••••••••••••• (bereits hinterlegt)'
+                : 'z. B. eyJhbGciOi...';
+        } else {
+            showMessage('Fehler: ' + data.error, true);
+        }
+    } catch (e) {
+        showMessage('Fehler: ' + e.message, true);
+    }
+}
+
+document.getElementById('settings-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    saveSettings();
+});
+
+function clearApiKey() {
+    if (confirm('Gespeicherten API-Key wirklich löschen?')) {
+        saveSettings({ clear_api_key: true });
+    }
+}
+</script>
+{% endblock %}
+{% endblock %}

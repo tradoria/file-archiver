@@ -298,7 +298,9 @@ GRUND: <kurze Begruendung auf Deutsch>"""
     
     # IONOS AI Model Hub (OpenAI-kompatibel)
     if base_url and "ionos" in base_url:
-        api_key = os.getenv("IONOS_AI_TOKEN", "")
+        # API-Key bevorzugt aus config.yaml (Einstellungen-Seite), sonst
+        # Umgebungsvariable als Fallback fuer bestehende Setups.
+        api_key = llm_config.get("ionos_ai_token") or os.getenv("IONOS_AI_TOKEN", "")
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         payload = {
             "model": model,
