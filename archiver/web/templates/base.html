@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}File Archiver{% endblock %}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="{{ url_for('static', filename='tailwindcss.js') }}"></script>
     <style type="text/tailwindcss">
         .tag { @apply inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded mr-1 mb-1; }
         .btn { @apply px-4 py-2 rounded font-medium transition-colors cursor-pointer; }

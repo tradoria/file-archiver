@@ -29,6 +29,8 @@ def create_app(config: Optional[dict] = None, config_path: Optional[Path] = None
     cfg = config or {}
     artifacts_dir = Path(cfg.get("artifacts_dir", "./artifacts")).resolve()
 
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
     app.config["ARTIFACTS_DIR"] = artifacts_dir
     app.config["CSV_DATA"] = load_csv_data(artifacts_dir)
     app.config["CONFIG_PATH"] = config_path or Path("config.yaml")

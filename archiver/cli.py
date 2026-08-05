@@ -474,7 +474,7 @@ def serve_cmd(
     cfg = _load_config(config)
     flask_app = create_app(cfg, config_path=config.resolve())
     typer.echo(f"Starting review interface at http://localhost:{port}")
-    flask_app.run(host="0.0.0.0", port=port, debug=True)
+    flask_app.run(host="127.0.0.1", port=port, debug=False)
 
 
 @app.command("copy")

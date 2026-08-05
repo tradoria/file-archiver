@@ -1,12 +1,25 @@
 """Background scan job manager for the web UI."""
 
 import subprocess
+import sys
 import threading
 import uuid
 import re
 from pathlib import Path
 from typing import Optional
 from collections import deque
+
+
+def _archiver_command() -> list[str]:
+    """Build the base command to re-invoke the archiver CLI.
+
+    Uses sys.executable so this works both from a normal Python
+    environment and from a frozen PyInstaller build, where there is
+    no guarantee a "python" interpreter is on PATH.
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--archiver-cli"]
+    return [sys.executable, "-m", "archiver"]
 
 
 class ScanJob:
@@ -59,7 +72,7 @@ class ScanJob:
                 self._add_log(f"Starte Scan: {folder}")
 
                 # Build scan command
-                cmd = ["python", "-m", "archiver", "scan", "--root", folder]
+                cmd = _archiver_command() + ["scan", "--root", folder]
 
                 if self.options.get("incremental"):
                     cmd.append("--incremental")
@@ -99,7 +112,7 @@ class ScanJob:
                 self.phase = "Analysiere..."
                 self._add_log("Starte Analyse...")
 
-                cmd = ["python", "-m", "archiver", "analyze"]
+                cmd = _archiver_command() + ["analyze"]
                 if self.options.get("use_llm"):
                     cmd.append("--use-llm")
 

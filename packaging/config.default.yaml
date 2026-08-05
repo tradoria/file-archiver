@@ -1,0 +1,42 @@
+root_dir: '%USERPROFILE%\Documents'
+
+scan_roots: []
+
+ignore_patterns:
+- node_modules
+- .git
+- __pycache__
+- .cache
+
+llm_sorting: false
+llm_sorting_model: openai/llama-3.3-70b
+llm_base_url: https://openai.inference.de-txl.ionos.com/v1
+
+artifacts_dir: ./artifacts
+
+supported_extensions:
+- .md
+- .txt
+- .pdf
+- .docx
+- .mp3
+- .m4a
+- .wav
+- .ogg
+- .mp4
+- .mkv
+- .avi
+- .mov
+- .webm
+- .jpg
+- .jpeg
+- .png
+- .tiff
+- .tif
+- .bmp
+- .gif
+- .webp
+
+whisper_enabled: true
+whisper_model: medium
+whisper_language: de

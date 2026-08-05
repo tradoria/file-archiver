@@ -1,5 +1,6 @@
 """Text extraction for MD, TXT, PDF, DOCX, Audio, Video, Images."""
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -156,8 +157,14 @@ def _get_whisper_model(model_name: str = "base"):
 
     from faster_whisper import WhisperModel
 
+    # Packaged builds bundle the model on disk and point us at it via this
+    # env var, so we load it directly instead of resolving/downloading by
+    # name from Hugging Face.
+    bundled_dir = os.environ.get("ARCHIVER_WHISPER_MODEL_DIR")
+    model_source = bundled_dir if bundled_dir else model_name
+
     # Use CPU with int8 for efficiency
-    _whisper_model = WhisperModel(model_name, device="cpu", compute_type="int8")
+    _whisper_model = WhisperModel(model_source, device="cpu", compute_type="int8")
     return _whisper_model
 
 
